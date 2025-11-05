@@ -1,0 +1,21 @@
+# vocalyx-api/requirements.txt
+# API centrale pour Vocalyx
+
+# Framework Web
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Base de données
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+
+# Celery & Redis
+celery==5.3.4
+redis==5.0.1
+
+# Validation & Sérialisation
+pydantic==2.5.0
+
+# Utilitaires
+python-dotenv==1.0.0
