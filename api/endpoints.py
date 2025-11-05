@@ -16,7 +16,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from sqlalchemy import func, exc
 
-from database import Transcription, Project
+from api.api.database import Transcription, Project
 from api.dependencies import (
     get_db, verify_project_key, verify_internal_key, verify_admin_key
 )
