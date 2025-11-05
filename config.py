@@ -73,35 +73,65 @@ class Config:
         """Charge les paramètres dans des attributs"""
         
         # DATABASE
-        self.database_url = self.config.get('DATABASE', 'url')
+        # Priorité à la variable d'environnement (pour Docker)
+        self.database_url = os.environ.get(
+            'DATABASE_URL', 
+            self.config.get('DATABASE', 'url')
+        )
         
         # REDIS
-        self.redis_url = self.config.get('REDIS', 'url')
+        self.redis_url = os.environ.get(
+            'REDIS_URL', 
+            self.config.get('REDIS', 'url')
+        )
         
         # CELERY
-        self.celery_broker_url = self.config.get('CELERY', 'broker_url')
-        self.celery_result_backend = self.config.get('CELERY', 'result_backend')
+        self.celery_broker_url = os.environ.get(
+            'CELERY_BROKER_URL', 
+            self.config.get('CELERY', 'broker_url')
+        )
+        self.celery_result_backend = os.environ.get(
+            'CELERY_RESULT_BACKEND', 
+            self.config.get('CELERY', 'result_backend')
+        )
         
-        # PATHS
+        # PATHS (Ceux-ci peuvent rester depuis config.ini, car ils sont relatifs au conteneur)
         self.upload_dir = Path(self.config.get('PATHS', 'upload_dir'))
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         
         # SECURITY
-        self.internal_api_key = self.config.get('SECURITY', 'internal_api_key')
-        self.admin_project_name = self.config.get('SECURITY', 'admin_project_name')
+        self.internal_api_key = os.environ.get(
+            'INTERNAL_API_KEY', 
+            self.config.get('SECURITY', 'internal_api_key')
+        )
+        self.admin_project_name = os.environ.get(
+            'ADMIN_PROJECT_NAME', 
+            self.config.get('SECURITY', 'admin_project_name')
+        )
         
         if self.internal_api_key == 'CHANGE_ME_SECRET_INTERNAL_KEY':
             logging.warning("⚠️ SECURITY: Internal API key is using default value. Please change it!")
         
         # CORS
-        origins_str = self.config.get('CORS', 'origins', fallback='*')
+        default_origins = self.config.get('CORS', 'origins', fallback='*')
+        origins_str = os.environ.get('CORS_ORIGINS', default_origins)
         self.cors_origins = [o.strip() for o in origins_str.split(',') if o.strip()]
         
         # LOGGING
-        self.log_level = self.config.get('LOGGING', 'level', fallback='INFO')
+        self.log_level = os.environ.get(
+            'LOG_LEVEL', 
+            self.config.get('LOGGING', 'level', fallback='INFO')
+        )
         self.log_file_enabled = self.config.getboolean('LOGGING', 'file_enabled', fallback=True)
         self.log_file_path = self.config.get('LOGGING', 'file_path', fallback='logs/vocalyx-api.log')
-        self.log_colored = self.config.getboolean('LOGGING', 'colored', fallback=True)
+        
+        # LOG_COLORED est particulier, car "false" en string est True en boolean
+        log_colored_str = os.environ.get(
+            'LOG_COLORED', 
+            self.config.get('LOGGING', 'colored', fallback='true')
+        )
+        self.log_colored = log_colored_str.lower() in ['true', '1', 't']
+
         
         # LIMITS
         self.max_file_size_mb = self.config.getint('LIMITS', 'max_file_size_mb', fallback=100)

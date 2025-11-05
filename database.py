@@ -112,6 +112,9 @@ class Transcription(Base):
             "project_name": self.project_name,
             "worker_id": self.worker_id,
             "celery_task_id": self.celery_task_id,
+            
+            "file_path": self.file_path,
+            
             "language": self.language,
             "processing_time": float(self.processing_time) if self.processing_time else None,
             "duration": float(self.duration) if self.duration else None,
@@ -154,12 +157,21 @@ def get_or_create_project(db: Session, project_name: str) -> Project:
 def init_db():
     """Initialise la base de données (crée les tables et le projet admin)"""
     Base.metadata.create_all(bind=engine)
-    logger.info("✅ Tables de base de données créées")
+    logger.warning("✅ Tables de base de données créées") # <-- Changé
     
     # Créer le projet admin si nécessaire
     db = SessionLocal()
     try:
         admin_project = get_or_create_project(db, config.admin_project_name)
-        logger.info(f"✅ Projet admin '{admin_project.name}' prêt")
+        logger.warning(f"✅ Projet admin '{admin_project.name}' prêt") # <-- Changé
+        
+        # --- AJOUT ---
+        # Affiche la clé pour que l'utilisateur puisse la copier
+        logger.warning("==================================================================") # <-- Changé
+        logger.warning(f"🔑 Clé API Admin ({admin_project.name}): {admin_project.api_key}") # <-- Changé
+        logger.warning("Copiez cette clé pour l'utiliser dans le dashboard") # <-- Changé
+        logger.warning("==================================================================") # <-- Changé
+        # --- FIN AJOUT ---
+        
     finally:
         db.close()

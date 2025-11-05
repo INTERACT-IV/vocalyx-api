@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Installation des dépendances système
 RUN apt-get update && apt-get install -y \
+    curl \
     gcc \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
