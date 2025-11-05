@@ -53,6 +53,7 @@ class TranscriptionResponse(BaseModel):
     project_name: Optional[str] = None
     worker_id: Optional[str] = None
     celery_task_id: Optional[str] = None
+    file_path: Optional[str] = None
     language: Optional[str] = None
     processing_time: Optional[float] = None
     duration: Optional[float] = None

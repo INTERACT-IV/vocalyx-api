@@ -96,7 +96,10 @@ class Config:
         )
         
         # PATHS (Ceux-ci peuvent rester depuis config.ini, car ils sont relatifs au conteneur)
-        self.upload_dir = Path(self.config.get('PATHS', 'upload_dir'))
+        self.upload_dir = Path(os.environ.get(
+            'UPLOAD_DIR',
+            self.config.get('PATHS', 'upload_dir')
+        ))
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         
         # SECURITY
