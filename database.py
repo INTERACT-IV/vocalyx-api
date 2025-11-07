@@ -9,7 +9,10 @@ import string
 import logging
 from datetime import datetime
 from sqlalchemy import create_engine, Column, String, Float, Text, Enum, DateTime, Integer, Boolean
+from sqlalchemy import Table, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from passlib.context import CryptContext
 
 from config import Config
 
@@ -17,6 +20,10 @@ config = Config()
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
 # Créer le moteur de base de données
 engine = create_engine(
@@ -33,6 +40,13 @@ def generate_api_key():
     alphabet = string.ascii_letters + string.digits
     return 'vk_' + ''.join(secrets.choice(alphabet) for _ in range(32))
 
+user_project_association = Table(
+    'user_project_association',
+    Base.metadata,
+    Column('user_id', String, ForeignKey('users.id'), primary_key=True),
+    Column('project_id', String, ForeignKey('projects.id'), primary_key=True)
+)
+
 class Project(Base):
     """Modèle pour les projets et leurs clés d'API"""
     __tablename__ = "projects"
@@ -41,6 +55,12 @@ class Project(Base):
     name = Column(String, unique=True, index=True, nullable=False)
     api_key = Column(String, unique=True, index=True, default=generate_api_key)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    users = relationship(
+        "User",
+        secondary=user_project_association,
+        back_populates="projects"
+    )
     
     def to_dict(self):
         """Convertit l'objet en dictionnaire (sans la clé API)"""
@@ -56,6 +76,31 @@ class Project(Base):
             "id": self.id,
             "name": self.name,
             "api_key": self.api_key,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+    
+class User(Base):
+    """Modèle pour les utilisateurs du Dashboard"""
+    __tablename__ = "users"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    is_admin = Column(Boolean, default=False, nullable=False)
+    
+    projects = relationship(
+        "Project",
+        secondary=user_project_association,
+        back_populates="users"
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "is_admin": self.is_admin,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
 
@@ -162,16 +207,33 @@ def init_db():
     # Créer le projet admin si nécessaire
     db = SessionLocal()
     try:
+        # 1. Gérer le projet Admin
         admin_project = get_or_create_project(db, config.admin_project_name)
-        logger.warning(f"✅ Projet admin '{admin_project.name}' prêt") # <-- Changé
-        
-        # --- AJOUT ---
-        # Affiche la clé pour que l'utilisateur puisse la copier
-        logger.warning("==================================================================") # <-- Changé
-        logger.warning(f"🔑 Clé API Admin ({admin_project.name}): {admin_project.api_key}") # <-- Changé
-        logger.warning("Copiez cette clé pour l'utiliser dans le dashboard") # <-- Changé
-        logger.warning("==================================================================") # <-- Changé
-        # --- FIN AJOUT ---
+        logger.warning(f"✅ Projet admin '{admin_project.name}' prêt")
+        logger.warning("==================================================================")
+        logger.warning(f"🔑 Clé API Admin ({admin_project.name}): {admin_project.api_key}")
+        logger.warning("Copiez cette clé pour l'utiliser dans le dashboard (SI PAS DE LOGIN)")
+        logger.warning("==================================================================")
+
+        # 2. Gérer l'utilisateur Admin
+        admin_user = db.query(User).filter(User.username == "admin").first()
+        if not admin_user:
+            logger.warning("Utilisateur 'admin' non trouvé. Création...")
+            admin_password_hash = get_password_hash("admin")
+            new_admin_user = User(
+                username="admin",
+                hashed_password=admin_password_hash,
+                is_admin=True
+            )
+            new_admin_user = User(
+                username="admin",
+                hashed_password=admin_password_hash
+            )
+            db.add(new_admin_user)
+            db.commit()
+            logger.warning("✅ Utilisateur 'admin' créé avec le mot de passe 'admin'")
+        else:
+            logger.warning("✅ Utilisateur 'admin' déjà existant.")
         
     finally:
         db.close()

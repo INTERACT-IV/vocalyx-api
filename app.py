@@ -11,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import Config
 from database import Base, engine
 from celery_app import celery_app
-from api.endpoints import router as api_router
+
+from api.endpoints import router as api_router, auth_router, admin_router
 from logging_config import setup_logging, setup_colored_logging
 
 # Initialiser la configuration
@@ -75,6 +76,10 @@ app.add_middleware(
 
 # Inclure les routes API
 app.include_router(api_router, prefix="/api")
+# Inclure les routes d'authentification
+app.include_router(auth_router, prefix="/api", tags=["Authentication"])
+# Inclure les routes de gestion admin
+app.include_router(admin_router, prefix="/api")
 
 @app.get("/", tags=["Root"])
 def root():

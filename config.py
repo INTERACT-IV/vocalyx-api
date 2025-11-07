@@ -45,7 +45,10 @@ class Config:
         
         config['SECURITY'] = {
             'internal_api_key': 'CHANGE_ME_SECRET_INTERNAL_KEY',
-            'admin_project_name': 'ISICOMTECH'
+            'admin_project_name': 'ISICOMTECH',
+            'jwt_secret_key': 'CHANGE_ME_SUPER_SECRET_KEY_FOR_JWT_123456',
+            'jwt_algorithm': 'HS256',
+            'jwt_expire_minutes': '10080' # 7 jours
         }
         
         config['CORS'] = {
@@ -111,6 +114,16 @@ class Config:
             'ADMIN_PROJECT_NAME', 
             self.config.get('SECURITY', 'admin_project_name')
         )
+
+        self.jwt_secret_key = os.environ.get(
+            'JWT_SECRET_KEY',
+            self.config.get('SECURITY', 'jwt_secret_key')
+        )
+        self.jwt_algorithm = self.config.get('SECURITY', 'jwt_algorithm')
+        self.jwt_expire_minutes = self.config.getint('SECURITY', 'jwt_expire_minutes')
+        
+        if self.jwt_secret_key == 'CHANGE_ME_SUPER_SECRET_KEY_FOR_JWT_123456':
+            logging.warning("⚠️ SECURITY: JWT Secret Key is using default value. Please change it!")
         
         if self.internal_api_key == 'CHANGE_ME_SECRET_INTERNAL_KEY':
             logging.warning("⚠️ SECURITY: Internal API key is using default value. Please change it!")

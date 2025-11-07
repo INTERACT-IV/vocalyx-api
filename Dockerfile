@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y \
 
 # Installation des dépendances Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Mettre à jour pip lui-même pour rafraîchir les index de paquets
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copie du code source
 COPY . .

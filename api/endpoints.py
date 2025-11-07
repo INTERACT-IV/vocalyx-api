@@ -13,10 +13,15 @@ from fastapi import (
     APIRouter, Depends, File, HTTPException, Query, 
     UploadFile, Form, status, Request
 )
-from sqlalchemy.orm import Session
+from fastapi.security import OAuth2PasswordRequestForm
+from datetime import timedelta
+from database import User
+from api import auth, schemas
+
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, exc
 
-from database import Transcription, Project
+from database import Transcription, Project, User
 from api.dependencies import (
     get_db, verify_project_key, verify_internal_key, verify_admin_key
 )
@@ -27,8 +32,210 @@ from api.schemas import (
 )
 from celery_app import transcribe_audio_task, get_celery_stats, get_task_status, cancel_task
 
+from fastapi.security import OAuth2PasswordRequestForm
+from datetime import timedelta
+from api import auth, schemas
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
+auth_router = APIRouter()
+
+admin_router = APIRouter(
+    tags=["Admin Management"],
+    dependencies=[Depends(auth.get_current_admin_user)]
+)
+
+# ============================================================================
+# AUTHENTIFICATION
+# ============================================================================
+
+@auth_router.post("/auth/token", response_model=schemas.Token, tags=["Authentication"])
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(), 
+    db: Session = Depends(get_db)
+):
+    """
+    Fournit un token JWT en échange de username/password
+    """
+    user = auth.authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=auth.JWT_EXPIRE_MINUTES)
+    token_data = {
+        "sub": user.username,
+        "is_admin": user.is_admin 
+    }
+    access_token = auth.create_access_token(
+        data=token_data, expires_delta=access_token_expires
+    )
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@router.get("/admin/admin-api-key", response_model=ProjectDetails, tags=["Admin"])
+def get_admin_api_key(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """
+    [JWT Protégé] Récupère les détails (et la clé) du projet admin
+    """
+    config = request.app.state.config
+    
+    # Nous vérifions que l'utilisateur est bien 'admin' (même si pour l'instant c'est le seul)
+    if current_user.username != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+        
+    admin_project = db.query(Project).filter(Project.name == config.admin_project_name).first()
+    if not admin_project:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Admin project '{config.admin_project_name}' not found"
+        )
+    
+    return admin_project.to_dict_with_key()
+
+# ============================================================================
+# GESTION DES UTILISATEURS (NOUVEAU)
+# ============================================================================
+
+@admin_router.post("/admin/users", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(
+    user_in: schemas.UserCreate, 
+    db: Session = Depends(get_db)
+):
+    """
+    [Admin] Crée un nouvel utilisateur (admin ou normal).
+    """
+    # Vérifier si l'utilisateur existe déjà
+    existing_user = db.query(User).filter(User.username == user_in.username).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Username '{user_in.username}' already exists"
+        )
+    
+    # Hacher le mot de passe
+    hashed_password = auth.get_password_hash(user_in.password)
+    
+    # Créer le nouvel utilisateur
+    new_user = User(
+        username=user_in.username,
+        hashed_password=hashed_password,
+        is_admin=user_in.is_admin
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    logger.info(f"Admin created new user: {new_user.username} (is_admin={new_user.is_admin})")
+    return new_user
+
+@admin_router.get("/admin/users", response_model=List[schemas.UserResponse])
+def list_users(db: Session = Depends(get_db)):
+    """
+    [Admin] Liste tous les utilisateurs et leurs projets associés.
+    """
+    # options(joinedload(User.projects)) charge les projets en même temps (eager loading)
+    users = db.query(User).options(
+        joinedload(User.projects)
+    ).order_by(User.username).all()
+    
+    return users
+
+@admin_router.post("/admin/users/assign-project", response_model=schemas.UserResponse)
+def assign_project_to_user(
+    link_in: schemas.UserProjectLink, 
+    db: Session = Depends(get_db)
+):
+    """
+    [Admin] Associe un projet à un utilisateur.
+    """
+    user = db.query(User).options(joinedload(User.projects)).filter(User.id == link_in.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    project = db.query(Project).filter(Project.id == link_in.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project not in user.projects:
+        user.projects.append(project)
+        db.commit()
+        db.refresh(user)
+        logger.info(f"Assigned project '{project.name}' to user '{user.username}'")
+    
+    return user
+
+@admin_router.post("/admin/users/remove-project", response_model=schemas.UserResponse)
+def remove_project_from_user(
+    link_in: schemas.UserProjectLink, 
+    db: Session = Depends(get_db)
+):
+    """
+    [Admin] Dissocie un projet d'un utilisateur.
+    """
+    user = db.query(User).options(joinedload(User.projects)).filter(User.id == link_in.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    project = db.query(Project).filter(Project.id == link_in.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project in user.projects:
+        user.projects.remove(project)
+        db.commit()
+        db.refresh(user)
+        logger.info(f"Removed project '{project.name}' from user '{user.username}'")
+    
+    return user
+
+@admin_router.put("/admin/users/{user_id}/password")
+def update_user_password(
+    user_id: str, 
+    password_in: schemas.UserPasswordUpdate, 
+    db: Session = Depends(get_db)
+):
+    """
+    [Admin] Réinitialise le mot de passe d'un utilisateur.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user.hashed_password = auth.get_password_hash(password_in.password)
+    db.commit()
+    logger.info(f"Admin reset password for user: {user.username}")
+    
+    return {"status": "password updated", "user_id": user_id}
+
+@admin_router.delete("/admin/users/{user_id}")
+def delete_user(user_id: str, db: Session = Depends(get_db)):
+    """
+    [Admin] Supprime un utilisateur.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.username == "admin":
+        raise HTTPException(status_code=403, detail="Cannot delete default admin user")
+        
+    db.delete(user)
+    db.commit()
+    logger.info(f"Admin deleted user: {user.username}")
+    
+    return {"status": "user deleted", "user_id": user_id}
 
 # ============================================================================
 # PROJETS

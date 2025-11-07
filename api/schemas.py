@@ -21,6 +21,9 @@ class ProjectResponse(BaseModel):
     name: str
     created_at: Optional[str] = None
 
+    class Config:
+        from_attributes = True
+
 class ProjectDetails(ProjectResponse):
     """Schéma pour retourner un projet avec sa clé API"""
     api_key: str
@@ -84,3 +87,46 @@ class TaskStatusResponse(BaseModel):
     status: str  # PENDING, STARTED, SUCCESS, FAILURE, RETRY
     result: Optional[Any] = None
     info: Optional[Any] = None
+
+# ============================================================================
+# UTILISATEURS
+# ============================================================================
+
+class UserBase(BaseModel):
+    username: str
+
+class UserCreate(UserBase):
+    password: str
+
+    is_admin: bool = False
+
+class UserResponse(UserBase):
+    id: str
+    created_at: Optional[str] = None
+
+    is_admin: bool
+    projects: List[ProjectResponse] = []
+
+    class Config:
+        from_attributes = True # Pydantic v2
+        # orm_mode = True # Pydantic v1
+
+# ============================================================================
+# AUTHENTIFICATION
+# ============================================================================
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+class UserProjectLink(BaseModel):
+    """Schéma pour lier un utilisateur et un projet"""
+    user_id: str
+    project_id: str
+
+class UserPasswordUpdate(BaseModel):
+    """Schéma pour mettre à jour un mot de passe"""
+    password: str = Field(..., min_length=4)
