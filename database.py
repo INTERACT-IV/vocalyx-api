@@ -225,10 +225,6 @@ def init_db():
                 hashed_password=admin_password_hash,
                 is_admin=True
             )
-            new_admin_user = User(
-                username="admin",
-                hashed_password=admin_password_hash
-            )
             db.add(new_admin_user)
             db.commit()
             logger.warning("✅ Utilisateur 'admin' créé avec le mot de passe 'admin'")

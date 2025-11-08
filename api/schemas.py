@@ -4,7 +4,7 @@ Schémas Pydantic pour la validation et la sérialisation
 """
 
 from typing import Optional, List, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from datetime import datetime
 
 # ============================================================================
@@ -19,7 +19,14 @@ class ProjectResponse(BaseModel):
     """Schéma pour retourner un projet (sans la clé API)"""
     id: str
     name: str
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    # ✅ AJOUT : Sérialiseur pour convertir datetime en string ISO
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: Optional[datetime], _info):
+        if dt is None:
+            return None
+        return dt.isoformat()
 
     class Config:
         from_attributes = True
@@ -97,19 +104,23 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
-
     is_admin: bool = False
 
 class UserResponse(UserBase):
     id: str
-    created_at: Optional[str] = None
-
+    created_at: Optional[datetime] = None
     is_admin: bool
     projects: List[ProjectResponse] = []
 
+    # ✅ AJOUT : Sérialiseur pour convertir datetime en string ISO
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: Optional[datetime], _info):
+        if dt is None:
+            return None
+        return dt.isoformat()
+
     class Config:
-        from_attributes = True # Pydantic v2
-        # orm_mode = True # Pydantic v1
+        from_attributes = True
 
 # ============================================================================
 # AUTHENTIFICATION
