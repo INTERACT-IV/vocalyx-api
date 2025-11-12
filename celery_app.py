@@ -98,7 +98,9 @@ def get_celery_stats():
         dict: Statistiques Celery
     """
     try:
-        inspect = celery_app.control.inspect()
+        # On a besoin des deux : control pour envoyer, inspect pour lire
+        control = celery_app.control
+        inspect = control.inspect()
         
         # Workers actifs
         active_workers = inspect.active()
@@ -109,7 +111,7 @@ def get_celery_stats():
         # Le timeout est crucial pour ne pas bloquer l'API (1 seconde max)
         health_responses = None
         try:
-            health_responses = inspect.broadcast('get_worker_health', reply=True, timeout=1.0)
+            health_responses = control.broadcast('get_worker_health', reply=True, timeout=1.0)
         except Exception as e:
             logger.warning(f"Erreur lors du broadcast 'get_worker_health': {e}")
 

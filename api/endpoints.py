@@ -599,12 +599,56 @@ def delete_transcription(
 # ============================================================================
 
 @router.get("/workers", tags=["Workers"])
-def list_workers(_: bool = Depends(verify_internal_key)):
+def list_workers(
+    db: Session = Depends(get_db), # <-- AJOUT
+    _: bool = Depends(verify_internal_key)
+):
     """
     Liste les workers Celery actifs et leurs statistiques.
     Endpoint interne (nécessite X-Internal-Key)
     """
-    stats = get_celery_stats()
+    stats = get_celery_stats() # Get base stats from celery_app
+
+    try:
+        db_stats_query = db.query(
+            Transcription.worker_id,
+            func.sum(Transcription.duration).label('total_audio_s'),
+            func.sum(Transcription.processing_time).label('total_processing_s')
+        ).filter(
+            Transcription.worker_id != None,
+            Transcription.status == 'done'
+        ).group_by(
+            Transcription.worker_id
+        ).all()
+
+        # Convertir en dictionnaire pour fusion facile
+        db_stats_dict = {
+            row.worker_id: {
+                'total_audio_processed_s': row.total_audio_s or 0,
+                'total_processing_time_s': row.total_processing_s or 0
+            }
+            for row in db_stats_query
+        }
+        
+        # Fusionner db_stats dans stats['stats']
+        if stats.get('stats'):
+            for worker_name, worker_data in stats['stats'].items():
+                # Le nom du worker dans Celery est 'worker-01@hostname'
+                # Le worker_id dans la DB est 'worker-01'
+                simple_name = worker_name.split('@')[0]
+                if simple_name in db_stats_dict:
+                    # Ajouter les stats DB au worker
+                    worker_data['db_stats'] = db_stats_dict[simple_name]
+                else:
+                    # S'il n'a rien traité, on met 0
+                    worker_data['db_stats'] = {
+                        'total_audio_processed_s': 0,
+                        'total_processing_time_s': 0
+                    }
+
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des stats DB: {e}")
+
     return stats
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse, tags=["Tasks"])
