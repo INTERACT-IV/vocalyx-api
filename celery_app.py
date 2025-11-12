@@ -104,6 +104,22 @@ def get_celery_stats():
         active_workers = inspect.active()
         registered_tasks = inspect.registered()
         stats = inspect.stats()
+
+        # Lancer une commande de contrôle broadcast pour 'get_worker_health'
+        # Le timeout est crucial pour ne pas bloquer l'API (1 seconde max)
+        health_responses = None
+        try:
+            health_responses = inspect.broadcast('get_worker_health', reply=True, timeout=1.0)
+        except Exception as e:
+            logger.warning(f"Erreur lors du broadcast 'get_worker_health': {e}")
+
+        # Fusionner les health_responses dans stats
+        if health_responses:
+            for response in health_responses:
+                for worker_name, health_data in response.items():
+                    if worker_name in stats and health_data and 'error' not in health_data:
+                        # Fusionner les données de santé
+                        stats[worker_name]['health'] = health_data
         
         # Compter les workers
         worker_count = len(active_workers) if active_workers else 0
