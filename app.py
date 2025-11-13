@@ -179,7 +179,7 @@ app.include_router(auth_router, prefix="/api", tags=["Authentication"])
 # Inclure les routes de gestion admin
 app.include_router(admin_router, prefix="/api")
 # Inclure les routes WebSocket
-app.include_router(ws_router, tags=["WebSocket"])
+app.include_router(ws_router, prefix="/api", tags=["WebSocket"])
 
 @app.get("/", tags=["Root"])
 def root():

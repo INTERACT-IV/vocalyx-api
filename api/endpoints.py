@@ -22,6 +22,8 @@ from api import auth, schemas
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, exc # Assurez-vous que 'func' est importé
 
+from jose import JWTError, jwt
+
 from database import Transcription, Project, User, SessionLocal # AJOUT SessionLocal
 from api.dependencies import (
     get_db, verify_project_key, verify_internal_key, verify_admin_key,
@@ -122,41 +124,137 @@ async def get_dashboard_state() -> dict:
 # ============================================================================
 
 @ws_router.websocket("/ws/updates")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    user: User = Depends(get_user_from_websocket) # Authentification
-):
+async def websocket_endpoint(websocket: WebSocket):
     """
-    Endpoint WebSocket. Authentifie, connecte, et envoie l'état initial.
+    ✅ VERSION FINALE: Endpoint WebSocket sans aucune dépendance FastAPI
+    Tout est géré manuellement à l'intérieur de la fonction
     """
+    logger.info("=" * 70)
+    logger.info("WebSocket: 🔌 Nouvelle connexion entrante")
+    logger.info("=" * 70)
+    
+    # ✅ ÉTAPE 1: ACCEPTER LA CONNEXION IMMÉDIATEMENT
+    try:
+        await websocket.accept()
+        logger.info("WebSocket: ✅ Connexion acceptée (accept() réussi)")
+    except Exception as e:
+        logger.error(f"WebSocket: ❌ Échec de accept(): {e}", exc_info=True)
+        return
+    
+    # Créer une session DB manuelle
+    db = SessionLocal()
     manager = websocket.app.state.ws_manager
-    await manager.connect(websocket)
-    logger.info(f"Client WebSocket {user.username} authentifié et connecté.")
     
     try:
-        # --- MODIFICATION ---
-        # Appeler la nouvelle fonction helper pour obtenir l'état
-        logger.info(f"Envoi des données initiales au client {user.username}...")
-        initial_state = await get_dashboard_state()
+        # ✅ ÉTAPE 2: Récupérer le token
+        token = websocket.query_params.get("token")
+        logger.info(f"WebSocket: Token présent: {token is not None}")
         
-        # Envoyer comme un seul objet
-        await websocket.send_json({
-            "type": "initial_dashboard_state", 
-            "data": initial_state
-        })
-        logger.info("-> Données initiales complètes envoyées.")
-        # --- FIN MODIFICATION ---
+        if token is None:
+            logger.warning("WebSocket: ❌ Aucun token fourni")
+            await websocket.send_json({
+                "type": "error",
+                "message": "Authentication required"
+            })
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
         
-        while True:
-            # Boucle "keep-alive"
-            await websocket.receive_text()
+        logger.debug(f"WebSocket: Token (premiers caractères): {token[:30]}...")
+        
+        # ✅ ÉTAPE 3: Décoder le JWT
+        try:
+            logger.info("WebSocket: 🔐 Décodage du JWT...")
+            payload = jwt.decode(token, auth.JWT_SECRET_KEY, algorithms=[auth.JWT_ALGORITHM])
+            username: str = payload.get("sub")
             
+            if username is None:
+                logger.warning("WebSocket: ❌ 'sub' manquant dans le JWT")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid token format"
+                })
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            
+            logger.info(f"WebSocket: ✅ Token décodé avec succès. Username: '{username}'")
+            
+        except JWTError as e:
+            logger.error(f"WebSocket: ❌ Erreur JWT: {e}")
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Invalid or expired token: {str(e)}"
+            })
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        
+        # ✅ ÉTAPE 4: Vérifier l'utilisateur dans la DB
+        logger.info(f"WebSocket: 🔍 Recherche de l'utilisateur '{username}' dans la DB...")
+        user = db.query(User).filter(User.username == username).first()
+        
+        if user is None:
+            logger.warning(f"WebSocket: ❌ Utilisateur '{username}' non trouvé dans la DB")
+            await websocket.send_json({
+                "type": "error",
+                "message": "User not found"
+            })
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        
+        logger.info(f"WebSocket: ✅✅✅ Client '{user.username}' AUTHENTIFIÉ AVEC SUCCÈS !")
+        
+        # ✅ ÉTAPE 5: Enregistrer dans le manager
+        await manager.connect(websocket)
+        logger.info(f"WebSocket: ✅ Client '{user.username}' ajouté au ConnectionManager")
+        
+        # ✅ ÉTAPE 6: Envoyer l'état initial
+        try:
+            logger.info(f"WebSocket: 📊 Récupération de l'état initial du dashboard...")
+            initial_state = await get_dashboard_state()
+            
+            logger.info(f"WebSocket: 📤 Envoi de l'état initial à '{user.username}'...")
+            await websocket.send_json({
+                "type": "initial_dashboard_state", 
+                "data": initial_state
+            })
+            logger.info(f"WebSocket: ✅ État initial envoyé avec succès !")
+        except Exception as e:
+            logger.error(f"WebSocket: ❌ Erreur lors de l'envoi de l'état initial: {e}", exc_info=True)
+            await websocket.send_json({
+                "type": "error",
+                "message": "Failed to load initial state"
+            })
+        
+        # ✅ ÉTAPE 7: Boucle keep-alive
+        logger.info(f"WebSocket: ♾️  Entrée dans la boucle keep-alive pour '{user.username}'")
+        while True:
+            try:
+                data = await websocket.receive_text()
+                logger.debug(f"WebSocket: Message reçu de '{user.username}': {data[:50]}...")
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket: 👋 Client '{user.username}' déconnecté proprement")
+                break
+            except Exception as e:
+                logger.warning(f"WebSocket: ⚠️ Erreur dans la boucle keep-alive: {e}")
+                break
+        
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info(f"Client WebSocket {user.username} déconnecté.")
+        logger.info("WebSocket: 👋 Déconnexion détectée (WebSocketDisconnect)")
     except Exception as e:
+        logger.error(f"WebSocket: ❌ Erreur critique: {e}", exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Internal server error"
+            })
+        except:
+            logger.warning("WebSocket: Impossible d'envoyer le message d'erreur (connexion fermée)")
+    finally:
+        # ✅ ÉTAPE 8: Nettoyage
+        logger.info("WebSocket: 🧹 Nettoyage des ressources...")
+        db.close()
         manager.disconnect(websocket)
-        logger.error(f"Erreur WebSocket: {e}", exc_info=True)
+        logger.info("WebSocket: ✅ Connexion fermée et nettoyée")
+        logger.info("=" * 70)
 
 
 # ============================================================================

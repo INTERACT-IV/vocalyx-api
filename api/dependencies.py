@@ -4,18 +4,18 @@ Dépendances FastAPI pour l'authentification et l'accès DB
 """
 
 import secrets
-import logging # <-- AJOUT
+import logging
 from typing import Optional
 from fastapi import Depends, HTTPException, status, Header, Form, WebSocket, Query
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 
-from database import SessionLocal, Project, User # <-- SessionLocal est bien importé
+from database import SessionLocal, Project, User
 from config import Config
 from api import auth
 
 config = Config()
-logger = logging.getLogger(__name__) # <-- AJOUT
+logger = logging.getLogger(__name__)
 
 def get_db():
     """Dépendance pour obtenir une session de base de données"""
@@ -96,13 +96,11 @@ def verify_admin_key(
 
 async def get_user_from_websocket(
     websocket: WebSocket,
-    token: Optional[str] = Query(None), # Lire le token depuis ?token=...
-    # db: Session = Depends(get_db) # <-- On garde la correction précédente
+    token: Optional[str] = Query(None)
 ) -> User:
     """
-    Dépendance d'authentification pour les WebSockets.
-    Gère sa propre session DB.
-    AJOUT: Logs détaillés.
+    ✅ CORRECTION: Dépendance d'authentification pour les WebSockets.
+    Gère sa propre session DB manuellement (pas de Depends).
     """
     
     logger.info("WebSocket: Tentative d'authentification...")
@@ -114,11 +112,14 @@ async def get_user_from_websocket(
     
     if token is None:
         logger.warning("WebSocket: Échec. Aucun token fourni dans la query string.")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise credentials_exception
     
-    # logger.debug(f"WebSocket: Token reçu: {token[:15]}...") # Décommenter si nécessaire
-
+    logger.debug(f"WebSocket: Token reçu (premiers caractères): {token[:20]}...")
+    
+    # ✅ CORRECTION: Créer manuellement la session DB
     db = SessionLocal()
+    
     try:
         logger.info("WebSocket: Décodage du JWT...")
         payload = jwt.decode(token, auth.JWT_SECRET_KEY, algorithms=[auth.JWT_ALGORITHM])
@@ -126,24 +127,25 @@ async def get_user_from_websocket(
         
         if username is None:
             logger.warning("WebSocket: Échec. 'sub' (username) manquant dans le payload JWT.")
-            db.close()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise credentials_exception
         
         logger.info(f"WebSocket: Token décodé. Username: {username}")
 
     except JWTError as e:
-        logger.error(f"WebSocket: Échec. Erreur JWT: {e}")
+        logger.error(f"WebSocket: Échec JWT decode: {e}")
         db.close()
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise credentials_exception
     
     logger.info(f"WebSocket: Recherche de l'utilisateur '{username}' dans la base de données...")
     user = db.query(User).filter(User.username == username).first()
+    db.close()  # ✅ CORRECTION: Fermer la session après usage
     
     if user is None:
         logger.warning(f"WebSocket: Échec. Utilisateur '{username}' non trouvé dans la base de données.")
-        db.close()
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise credentials_exception
     
-    logger.info(f"WebSocket: Authentification réussie pour l'utilisateur '{username}'.")
-    db.close()
+    logger.info(f"WebSocket: ✅ Authentification réussie pour l'utilisateur '{username}'.")
     return user
