@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from fastapi import (
     APIRouter, Depends, File, HTTPException, Query, 
-    UploadFile, Form, status, Request
+    UploadFile, Form, status, Request, WebSocket, WebSocketDisconnect
 )
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
@@ -23,14 +23,17 @@ from sqlalchemy import func, exc
 
 from database import Transcription, Project, User
 from api.dependencies import (
-    get_db, verify_project_key, verify_internal_key, verify_admin_key
+    get_db, verify_project_key, verify_internal_key, verify_admin_key,
+    get_user_from_websocket
 )
 from api.schemas import (
     TranscriptionResponse, TranscriptionCreate, TranscriptionUpdate,
     ProjectResponse, ProjectCreate, ProjectDetails,
     TranscriptionCountResponse, TaskStatusResponse
 )
-from celery_app import transcribe_audio_task, get_celery_stats, get_task_status, cancel_task
+# --- CORRECTION : Ré-importer get_celery_stats ---
+from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats
+# --- FIN CORRECTION ---
 
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
@@ -39,11 +42,47 @@ from api import auth, schemas
 logger = logging.getLogger(__name__)
 router = APIRouter()
 auth_router = APIRouter()
+ws_router = APIRouter()
 
 admin_router = APIRouter(
     tags=["Admin Management"],
     dependencies=[Depends(auth.get_current_admin_user)]
 )
+
+# ============================================================================
+# WEBSOCKET ENDPOINT
+# ============================================================================
+
+@ws_router.websocket("/ws/updates")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    user: User = Depends(get_user_from_websocket) # Authentification
+):
+    """
+    Endpoint WebSocket. Authentifie l'utilisateur via le cookie
+    et l'ajoute au pool de connexions.
+    """
+    manager = websocket.app.state.ws_manager
+    await manager.connect(websocket)
+    
+    try:
+        # Envoyer les données initiales dès la connexion
+        # (L'API pollera en interne et enverra les stats)
+        logger.info(f"Client WebSocket {user.username} authentifié et connecté.")
+        
+        while True:
+            # Boucle "keep-alive"
+            # Nous ne recevons rien, nous ne faisons qu'envoyer.
+            await websocket.receive_text()
+            # On pourrait gérer des messages entrants ici si besoin
+            
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info(f"Client WebSocket {user.username} déconnecté.")
+    except Exception as e:
+        manager.disconnect(websocket)
+        logger.error(f"Erreur WebSocket: {e}", exc_info=True)
+
 
 # ============================================================================
 # AUTHENTIFICATION
@@ -87,7 +126,6 @@ def get_admin_api_key(
     """
     config = request.app.state.config
     
-    # Nous vérifions que l'utilisateur est bien 'admin' (même si pour l'instant c'est le seul)
     if current_user.username != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -115,7 +153,6 @@ def create_user(
     """
     [Admin] Crée un nouvel utilisateur (admin ou normal).
     """
-    # Vérifier si l'utilisateur existe déjà
     existing_user = db.query(User).filter(User.username == user_in.username).first()
     if existing_user:
         raise HTTPException(
@@ -123,10 +160,8 @@ def create_user(
             detail=f"Username '{user_in.username}' already exists"
         )
     
-    # Hacher le mot de passe
     hashed_password = auth.get_password_hash(user_in.password)
     
-    # Créer le nouvel utilisateur
     new_user = User(
         username=user_in.username,
         hashed_password=hashed_password,
@@ -145,7 +180,6 @@ def list_users(db: Session = Depends(get_db)):
     """
     [Admin] Liste tous les utilisateurs et leurs projets associés.
     """
-    # options(joinedload(User.projects)) charge les projets en même temps (eager loading)
     users = db.query(User).options(
         joinedload(User.projects)
     ).order_by(User.username).all()
@@ -310,13 +344,13 @@ async def create_transcription(
     """
     Crée une nouvelle transcription (nécessite la clé API du projet).
     Upload le fichier et enqueue une tâche Celery.
+    PUBLIE une mise à jour sur Redis.
     """
     config = request.app.state.config
     
     # 1. Validation du fichier
     content = await file.read()
     
-    # Taille
     max_size_bytes = config.max_file_size_mb * 1024 * 1024
     if len(content) > max_size_bytes:
         raise HTTPException(
@@ -324,7 +358,6 @@ async def create_transcription(
             detail=f"File size exceeds {config.max_file_size_mb}MB limit"
         )
     
-    # Extension
     filename = file.filename or "upload.bin"
     extension = Path(filename).suffix.lstrip('.').lower()
     if extension not in config.allowed_extensions:
@@ -364,7 +397,6 @@ async def create_transcription(
         db.refresh(transcription)
     except Exception as e:
         db.rollback()
-        # Supprimer le fichier uploadé
         file_path.unlink(missing_ok=True)
         logger.error(f"Database error: {e}")
         raise HTTPException(
@@ -376,17 +408,21 @@ async def create_transcription(
     try:
         task = transcribe_audio_task.delay(transcription_id)
         
-        # Mettre à jour avec le task_id
         transcription.celery_task_id = task.id
         db.commit()
         
+        # --- AJOUT PUBLISH REDIS ---
+        redis_pub = request.app.state.redis_pub
+        if redis_pub:
+            await redis_pub.publish("vocalyx_updates", "new_transcription")
+        # --- FIN AJOUT ---
+            
         logger.info(f"[{transcription_id}] Transcription created for project '{project.name}' | Task: {task.id}")
         
         return transcription.to_dict()
         
     except Exception as e:
         logger.error(f"Failed to enqueue Celery task: {e}")
-        # La transcription existe en DB mais n'a pas été enqueueée
         transcription.status = "error"
         transcription.error_message = f"Failed to enqueue task: {str(e)}"
         db.commit()
@@ -416,7 +452,6 @@ def list_transcriptions(
     """
     query = db.query(Transcription)
     
-    # Filtres
     if status:
         query = query.filter(Transcription.status == status)
     if project:
@@ -424,7 +459,6 @@ def list_transcriptions(
     if search:
         query = query.filter(Transcription.text.ilike(f"%{search}%"))
     
-    # Pagination
     offset = (page - 1) * limit
     transcriptions = query.order_by(
         Transcription.created_at.desc()
@@ -444,7 +478,6 @@ def count_transcriptions(
     Compte les transcriptions avec filtres et retourne les stats globales.
     Endpoint interne (nécessite X-Internal-Key)
     """
-    # Requête filtrée
     filtered_query = db.query(Transcription)
     if status:
         filtered_query = filtered_query.filter(Transcription.status == status)
@@ -455,7 +488,6 @@ def count_transcriptions(
     
     total_filtered = filtered_query.count()
     
-    # Stats globales par statut
     grouped_counts = db.query(
         Transcription.status,
         func.count(Transcription.id)
@@ -504,15 +536,17 @@ def get_transcription(
 # ============================================================================
 
 @router.patch("/transcriptions/{transcription_id}", response_model=TranscriptionResponse, tags=["Transcriptions"])
-def update_transcription(
+async def update_transcription(
     transcription_id: str,
     update: TranscriptionUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     _: bool = Depends(verify_internal_key)
 ):
     """
     Met à jour une transcription (utilisé par les workers).
-    Endpoint interne (nécessite X-Internal-Key)
+    Endpoint interne (nécessite X-Internal-Key).
+    PUBLIE une mise à jour sur Redis.
     """
     transcription = db.query(Transcription).filter(
         Transcription.id == transcription_id
@@ -524,20 +558,25 @@ def update_transcription(
             detail=f"Transcription '{transcription_id}' not found"
         )
     
-    # Appliquer les mises à jour
     update_data = update.dict(exclude_unset=True)
     
     for key, value in update_data.items():
         if hasattr(transcription, key):
             setattr(transcription, key, value)
     
-    # Si le statut passe à "done" ou "error", mettre à jour finished_at
     if update.status in ["done", "error"] and not transcription.finished_at:
         transcription.finished_at = datetime.utcnow()
     
     try:
         db.commit()
         db.refresh(transcription)
+        
+        # --- AJOUT PUBLISH REDIS ---
+        redis_pub = request.app.state.redis_pub
+        if redis_pub:
+            await redis_pub.publish("vocalyx_updates", f"update_{transcription_id}")
+        # --- FIN AJOUT ---
+            
         logger.info(f"[{transcription_id}] Updated: {update_data}")
         return transcription.to_dict()
     except Exception as e:
@@ -553,7 +592,7 @@ def update_transcription(
 # ============================================================================
 
 @router.delete("/transcriptions/{transcription_id}", tags=["Transcriptions"])
-def delete_transcription(
+async def delete_transcription(
     transcription_id: str,
     request: Request,
     db: Session = Depends(get_db),
@@ -561,7 +600,8 @@ def delete_transcription(
 ):
     """
     Supprime une transcription et son fichier audio.
-    Endpoint interne (nécessite X-Internal-Key)
+    Endpoint interne (nécessite X-Internal-Key).
+    PUBLIE une mise à jour sur Redis.
     """
     transcription = db.query(Transcription).filter(
         Transcription.id == transcription_id
@@ -573,7 +613,6 @@ def delete_transcription(
             detail=f"Transcription '{transcription_id}' not found"
         )
     
-    # Supprimer le fichier audio
     if transcription.file_path:
         try:
             file_path = Path(transcription.file_path)
@@ -583,9 +622,14 @@ def delete_transcription(
         except Exception as e:
             logger.warning(f"[{transcription_id}] Failed to delete file: {e}")
     
-    # Supprimer de la base de données
     db.delete(transcription)
     db.commit()
+    
+    # --- AJOUT PUBLISH REDIS ---
+    redis_pub = request.app.state.redis_pub
+    if redis_pub:
+        await redis_pub.publish("vocalyx_updates", "delete_transcription")
+    # --- FIN AJOUT ---
     
     logger.info(f"[{transcription_id}] Transcription deleted")
     
@@ -600,15 +644,16 @@ def delete_transcription(
 
 @router.get("/workers", tags=["Workers"])
 def list_workers(
-    db: Session = Depends(get_db), # <-- AJOUT
+    db: Session = Depends(get_db),
     _: bool = Depends(verify_internal_key)
 ):
     """
     Liste les workers Celery actifs et leurs statistiques.
-    Endpoint interne (nécessite X-Internal-Key)
+    Endpoint interne (nécessite X-Internal-Key).
+    Calcule également les stats depuis la DB.
     """
-    stats = get_celery_stats() # Get base stats from celery_app
-
+    stats = get_celery_stats() 
+    
     try:
         db_stats_query = db.query(
             Transcription.worker_id,
@@ -621,7 +666,6 @@ def list_workers(
             Transcription.worker_id
         ).all()
 
-        # Convertir en dictionnaire pour fusion facile
         db_stats_dict = {
             row.worker_id: {
                 'total_audio_processed_s': row.total_audio_s or 0,
@@ -630,17 +674,12 @@ def list_workers(
             for row in db_stats_query
         }
         
-        # Fusionner db_stats dans stats['stats']
         if stats.get('stats'):
             for worker_name, worker_data in stats['stats'].items():
-                # Le nom du worker dans Celery est 'worker-01@hostname'
-                # Le worker_id dans la DB est 'worker-01'
                 simple_name = worker_name.split('@')[0]
                 if simple_name in db_stats_dict:
-                    # Ajouter les stats DB au worker
                     worker_data['db_stats'] = db_stats_dict[simple_name]
                 else:
-                    # S'il n'a rien traité, on met 0
                     worker_data['db_stats'] = {
                         'total_audio_processed_s': 0,
                         'total_processing_time_s': 0
@@ -650,6 +689,10 @@ def list_workers(
         logger.error(f"Erreur lors de la récupération des stats DB: {e}")
 
     return stats
+
+# ============================================================================
+# TÂCHES
+# ============================================================================
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse, tags=["Tasks"])
 def get_task(

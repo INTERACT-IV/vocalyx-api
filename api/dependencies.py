@@ -4,11 +4,13 @@ Dépendances FastAPI pour l'authentification et l'accès DB
 """
 
 import secrets
-from fastapi import Depends, HTTPException, status, Header, Form
+from fastapi import Depends, HTTPException, status, Header, Form, WebSocket, Query
 from sqlalchemy.orm import Session
+from jose import JWTError, jwt
 
-from database import SessionLocal, Project
+from database import SessionLocal, Project, User
 from config import Config
+from api import auth
 
 config = Config()
 
@@ -119,3 +121,37 @@ def verify_admin_key(
         )
     
     return True
+
+async def get_user_from_websocket(
+    websocket: WebSocket,
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Dépendance d'authentification pour les WebSockets.
+    Récupère le token JWT depuis le cookie 'vocalyx_auth_token'.
+    """
+    
+    # Nom du cookie défini dans vocalyx-frontend/app.py
+    cookie = websocket.cookies.get("vocalyx_auth_token")
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials from cookie",
+    )
+    
+    if cookie is None:
+        raise credentials_exception
+    
+    try:
+        payload = jwt.decode(cookie, auth.JWT_SECRET_KEY, algorithms=[auth.JWT_ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = db.query(User).filter(User.username == username).first()
+    if user is None:
+        raise credentials_exception
+    
+    return user
