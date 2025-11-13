@@ -5,7 +5,8 @@ Endpoints de l'API centrale
 
 import uuid
 import logging
-from datetime import datetime, timedelta
+import asyncio # AJOUT
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -13,17 +14,15 @@ from fastapi import (
     APIRouter, Depends, File, HTTPException, Query, 
     UploadFile, Form, status, Request, WebSocket, WebSocketDisconnect
 )
-from fastapi import WebSocketException, status as ws_status
 from fastapi.security import OAuth2PasswordRequestForm
-from fastapi.security import OAuth2PasswordRequestForm
-
+from datetime import timedelta
 from database import User
 from api import auth, schemas
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, exc
+from sqlalchemy import func, exc # Assurez-vous que 'func' est importé
 
-from database import Transcription, Project, User
+from database import Transcription, Project, User, SessionLocal # AJOUT SessionLocal
 from api.dependencies import (
     get_db, verify_project_key, verify_internal_key, verify_admin_key,
     get_user_from_websocket
@@ -33,9 +32,9 @@ from api.schemas import (
     ProjectResponse, ProjectCreate, ProjectDetails,
     TranscriptionCountResponse, TaskStatusResponse
 )
-
 from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats
 
+from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
 from api import auth, schemas
 
@@ -50,60 +49,114 @@ admin_router = APIRouter(
 )
 
 # ============================================================================
-# WEBSOCKET ENDPOINT
+# NOUVELLE FONCTION HELPER (PARTAGÉE)
+# ============================================================================
+
+async def get_dashboard_state() -> dict:
+    """
+    Fonction helper pour récupérer l'état complet du dashboard.
+    Exécute les requêtes bloquantes (DB, Celery) dans des threads.
+    """
+    logger.debug("Appel de get_dashboard_state...")
+    db = SessionLocal() # Session manuelle pour l'async
+
+    def get_db_data_sync():
+        """Fonction synchrone à exécuter dans un thread"""
+        try:
+            # 1. Compte des Transcriptions
+            total_filtered = db.query(Transcription).count()
+            grouped_counts_db = db.query(
+                Transcription.status,
+                func.count(Transcription.id)
+            ).group_by(Transcription.status).all()
+            
+            count_result = {
+                "total_filtered": total_filtered,
+                "pending": 0, "processing": 0, "done": 0, "error": 0, "total_global": 0
+            }
+            for s, count in grouped_counts_db:
+                if s in count_result:
+                    count_result[s] = count
+                    count_result["total_global"] += count
+
+            # 2. Transcriptions Récentes (Page 1)
+            transcriptions_db = db.query(Transcription).order_by(
+                Transcription.created_at.desc()
+            ).limit(25).offset(0).all()
+            transcription_list = [t.to_dict() for t in transcriptions_db]
+
+            return {
+                "transcription_count": count_result,
+                "transcriptions": transcription_list
+            }
+        except Exception as e:
+            logger.error(f"Erreur DB dans get_db_data_sync: {e}", exc_info=True)
+            return {"transcription_count": {}, "transcriptions": []}
+        finally:
+            db.close() # Toujours fermer la session
+
+    # Exécuter les tâches Celery (synchrone) et DB (synchrone)
+    # en parallèle dans des threads séparés
+    stats_task = asyncio.to_thread(get_celery_stats)
+    db_task = asyncio.to_thread(get_db_data_sync)
+
+    # Attendre les deux résultats
+    try:
+        worker_stats_result, db_data_result = await asyncio.gather(stats_task, db_task)
+    except Exception as e:
+        logger.error(f"Erreur lors de asyncio.gather dans get_dashboard_state: {e}", exc_info=True)
+        # S'assurer que db est fermé même si gather échoue (bien que db_task le gère)
+        if db.is_active:
+            db.close()
+        raise
+
+    # Combiner les résultats
+    return {
+        "worker_stats": worker_stats_result,
+        "transcription_count": db_data_result["transcription_count"],
+        "transcriptions": db_data_result["transcriptions"]
+    }
+
+# ============================================================================
+# WEBSOCKET ENDPOINT (MODIFIÉ)
 # ============================================================================
 
 @ws_router.websocket("/ws/updates")
 async def websocket_endpoint(
     websocket: WebSocket,
-    user: User = Depends(get_user_from_websocket)
+    user: User = Depends(get_user_from_websocket) # Authentification
 ):
     """
-    Endpoint WebSocket. Authentifie l'utilisateur via le token JWT
-    et l'ajoute au pool de connexions.
-    """
+    Endpoint WebSocket. Authentifie, connecte, et envoie l'état initial.
     """
     manager = websocket.app.state.ws_manager
-    
-    # ✅ AJOUT: Log avant d'accepter la connexion
-    logger.info(f"🔌 WebSocket connection attempt from user: {user.username}")
-    
     await manager.connect(websocket)
+    logger.info(f"Client WebSocket {user.username} authentifié et connecté.")
     
     try:
-        logger.info(f"✅ WebSocket connected: {user.username}")
+        # --- MODIFICATION ---
+        # Appeler la nouvelle fonction helper pour obtenir l'état
+        logger.info(f"Envoi des données initiales au client {user.username}...")
+        initial_state = await get_dashboard_state()
+        
+        # Envoyer comme un seul objet
+        await websocket.send_json({
+            "type": "initial_dashboard_state", 
+            "data": initial_state
+        })
+        logger.info("-> Données initiales complètes envoyées.")
+        # --- FIN MODIFICATION ---
         
         while True:
-            # Keep-alive
-            data = await websocket.receive_text()
-            # On pourrait gérer des messages entrants ici si besoin
+            # Boucle "keep-alive"
+            await websocket.receive_text()
             
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        logger.info(f"🔌 WebSocket disconnected: {user.username}")
+        logger.info(f"Client WebSocket {user.username} déconnecté.")
     except Exception as e:
         manager.disconnect(websocket)
-        logger.error(f"❌ WebSocket error for {user.username}: {e}", exc_info=True)
-    """
-    """
-    Endpoint WebSocket simplifié pour debug
-    """
-    logger.info(f"🔌 WebSocket connection received, token: {token is not None}")
-    
-    # ✅ ACCEPTER LA CONNEXION IMMÉDIATEMENT (sans auth pour tester)
-    await websocket.accept()
-    logger.info("✅ WebSocket accepted (auth disabled for debug)")
-    
-    try:
-        while True:
-            data = await websocket.receive_text()
-            logger.info(f"📬 Received: {data}")
-            await websocket.send_text(f"Echo: {data}")
-            
-    except WebSocketDisconnect:
-        logger.info("🔌 WebSocket disconnected")
-    except Exception as e:
-        logger.error(f"❌ WebSocket error: {e}", exc_info=True)
+        logger.error(f"Erreur WebSocket: {e}", exc_info=True)
 
 
 # ============================================================================

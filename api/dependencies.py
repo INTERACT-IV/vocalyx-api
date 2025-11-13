@@ -4,19 +4,18 @@ Dépendances FastAPI pour l'authentification et l'accès DB
 """
 
 import secrets
-import logging
+import logging # <-- AJOUT
 from typing import Optional
 from fastapi import Depends, HTTPException, status, Header, Form, WebSocket, Query
-from fastapi import WebSocketException, status as ws_status
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 
-from database import SessionLocal, Project, User
+from database import SessionLocal, Project, User # <-- SessionLocal est bien importé
 from config import Config
 from api import auth
 
 config = Config()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) # <-- AJOUT
 
 def get_db():
     """Dépendance pour obtenir une session de base de données"""
@@ -33,17 +32,6 @@ def verify_project_key(
 ) -> Project:
     """
     Vérifie que la clé API correspond au projet (pour les clients externes).
-    
-    Args:
-        project_name: Nom du projet (depuis le formulaire)
-        x_api_key: Clé API (depuis le header)
-        db: Session de base de données
-        
-    Returns:
-        Project: Le projet validé
-        
-    Raises:
-        HTTPException: Si le projet n'existe pas ou si la clé est invalide
     """
     project = db.query(Project).filter(Project.name == project_name).first()
     
@@ -66,16 +54,6 @@ def verify_internal_key(
 ) -> bool:
     """
     Vérifie la clé interne pour les communications inter-services
-    (Dashboard, Workers).
-    
-    Args:
-        x_internal_key: Clé interne (depuis le header)
-        
-    Returns:
-        bool: True si la clé est valide
-        
-    Raises:
-        HTTPException: Si la clé est invalide
     """
     if not config.internal_api_key:
         raise HTTPException(
@@ -96,17 +74,7 @@ def verify_admin_key(
     db: Session = Depends(get_db)
 ) -> bool:
     """
-    Vérifie que la clé API est celle du projet admin (pour la gestion des projets).
-    
-    Args:
-        x_api_key: Clé API (depuis le header)
-        db: Session de base de données
-        
-    Returns:
-        bool: True si la clé est valide
-        
-    Raises:
-        HTTPException: Si la clé est invalide ou le projet admin n'existe pas
+    Vérifie que la clé API est celle du projet admin.
     """
     admin_project = db.query(Project).filter(
         Project.name == config.admin_project_name
@@ -128,40 +96,54 @@ def verify_admin_key(
 
 async def get_user_from_websocket(
     websocket: WebSocket,
-    token: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    token: Optional[str] = Query(None), # Lire le token depuis ?token=...
+    # db: Session = Depends(get_db) # <-- On garde la correction précédente
 ) -> User:
     """
     Dépendance d'authentification pour les WebSockets.
-    Récupère le token JWT depuis le paramètre 'token' de la query string.
+    Gère sa propre session DB.
+    AJOUT: Logs détaillés.
     """
-    logger.info(f"🔐 WebSocket auth attempt, token provided: {token is not None}")
-    # ✅ MODIFICATION: Utiliser WebSocketException au lieu de HTTPException
-    credentials_exception = WebSocketException(
-        code=ws_status.WS_1008_POLICY_VIOLATION,
-        reason="Could not validate credentials"
+    
+    logger.info("WebSocket: Tentative d'authentification...")
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials from token",
     )
     
     if token is None:
-        logger.error("❌ WebSocket auth failed: No token in query string")
+        logger.warning("WebSocket: Échec. Aucun token fourni dans la query string.")
         raise credentials_exception
     
-    logger.info(f"🔑 Token (first 20 chars): {token[:20]}...")
-    
+    # logger.debug(f"WebSocket: Token reçu: {token[:15]}...") # Décommenter si nécessaire
+
+    db = SessionLocal()
     try:
+        logger.info("WebSocket: Décodage du JWT...")
         payload = jwt.decode(token, auth.JWT_SECRET_KEY, algorithms=[auth.JWT_ALGORITHM])
         username: str = payload.get("sub")
-        logger.info(f"✅ JWT decoded successfully, username: {username}")
+        
         if username is None:
+            logger.warning("WebSocket: Échec. 'sub' (username) manquant dans le payload JWT.")
+            db.close()
             raise credentials_exception
+        
+        logger.info(f"WebSocket: Token décodé. Username: {username}")
+
     except JWTError as e:
-        logger.warning(f"WebSocket: JWT decode failed: {e}")
+        logger.error(f"WebSocket: Échec. Erreur JWT: {e}")
+        db.close()
         raise credentials_exception
     
+    logger.info(f"WebSocket: Recherche de l'utilisateur '{username}' dans la base de données...")
     user = db.query(User).filter(User.username == username).first()
+    
     if user is None:
-        logger.warning(f"WebSocket: User '{username}' not found in DB")
+        logger.warning(f"WebSocket: Échec. Utilisateur '{username}' non trouvé dans la base de données.")
+        db.close()
         raise credentials_exception
     
-    logger.info(f"✅ WebSocket: User '{username}' authenticated successfully")
+    logger.info(f"WebSocket: Authentification réussie pour l'utilisateur '{username}'.")
+    db.close()
     return user

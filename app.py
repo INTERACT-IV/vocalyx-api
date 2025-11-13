@@ -17,7 +17,9 @@ from celery_app import celery_app, get_celery_stats
 from api.endpoints import router as api_router, auth_router, admin_router, ws_router
 # --- CORRECTION ---
 from api.websocket_manager import ConnectionManager, manager
-# --- FIN CORRECTION ---
+# --- MODIFICATION: Importer la nouvelle fonction ---
+from api.endpoints import get_dashboard_state
+# --- FIN MODIFICATION ---
 from logging_config import setup_logging, setup_colored_logging
 
 # Initialiser la configuration
@@ -47,8 +49,23 @@ async def redis_pubsub_listener(redis_sub, manager: ConnectionManager):
         logger.info("📡 Abonné au canal Redis 'vocalyx_updates'")
         async for message in redis_sub.listen():
             if message["type"] == "message":
-                logger.info("📬 Message Pub/Sub reçu, diffusion...")
-                await manager.broadcast({"type": "transcription_update"})
+                logger.info("📬 Message Pub/Sub reçu, diffusion du nouvel état...")
+                
+                # --- MODIFICATION ---
+                try:
+                    # Au lieu d'un simple trigger, on récupère et envoie tout l'état
+                    state = await get_dashboard_state()
+                    
+                    # On utilise un nouveau type de message
+                    await manager.broadcast({
+                        "type": "dashboard_update", 
+                        "data": state
+                    })
+                    logger.info("-> Nouvel état du dashboard diffusé à tous les clients.")
+                except Exception as e:
+                    logger.error(f"❌ Erreur lors de la diffusion de l'état: {e}", exc_info=True)
+                # --- FIN MODIFICATION ---
+                            
     except asyncio.CancelledError:
         logger.info("🛑 Tâche Pub/Sub annulée.")
     except Exception as e:
