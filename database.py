@@ -233,3 +233,11 @@ def init_db():
         
     finally:
         db.close()
+
+def get_db():
+    """Dépendance pour obtenir une session de base de données"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
