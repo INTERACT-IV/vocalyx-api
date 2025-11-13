@@ -5,7 +5,7 @@ Endpoints de l'API centrale
 
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -13,8 +13,10 @@ from fastapi import (
     APIRouter, Depends, File, HTTPException, Query, 
     UploadFile, Form, status, Request, WebSocket, WebSocketDisconnect
 )
+from fastapi import WebSocketException, status as ws_status
 from fastapi.security import OAuth2PasswordRequestForm
-from datetime import timedelta
+from fastapi.security import OAuth2PasswordRequestForm
+
 from database import User
 from api import auth, schemas
 
@@ -31,11 +33,9 @@ from api.schemas import (
     ProjectResponse, ProjectCreate, ProjectDetails,
     TranscriptionCountResponse, TaskStatusResponse
 )
-# --- CORRECTION : Ré-importer get_celery_stats ---
-from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats
-# --- FIN CORRECTION ---
 
-from fastapi.security import OAuth2PasswordRequestForm
+from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats
+
 from datetime import timedelta
 from api import auth, schemas
 
@@ -56,32 +56,54 @@ admin_router = APIRouter(
 @ws_router.websocket("/ws/updates")
 async def websocket_endpoint(
     websocket: WebSocket,
-    user: User = Depends(get_user_from_websocket) # Authentification
+    user: User = Depends(get_user_from_websocket)
 ):
     """
-    Endpoint WebSocket. Authentifie l'utilisateur via le cookie
+    Endpoint WebSocket. Authentifie l'utilisateur via le token JWT
     et l'ajoute au pool de connexions.
     """
+    """
     manager = websocket.app.state.ws_manager
+    
+    # ✅ AJOUT: Log avant d'accepter la connexion
+    logger.info(f"🔌 WebSocket connection attempt from user: {user.username}")
+    
     await manager.connect(websocket)
     
     try:
-        # Envoyer les données initiales dès la connexion
-        # (L'API pollera en interne et enverra les stats)
-        logger.info(f"Client WebSocket {user.username} authentifié et connecté.")
+        logger.info(f"✅ WebSocket connected: {user.username}")
         
         while True:
-            # Boucle "keep-alive"
-            # Nous ne recevons rien, nous ne faisons qu'envoyer.
-            await websocket.receive_text()
+            # Keep-alive
+            data = await websocket.receive_text()
             # On pourrait gérer des messages entrants ici si besoin
             
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        logger.info(f"Client WebSocket {user.username} déconnecté.")
+        logger.info(f"🔌 WebSocket disconnected: {user.username}")
     except Exception as e:
         manager.disconnect(websocket)
-        logger.error(f"Erreur WebSocket: {e}", exc_info=True)
+        logger.error(f"❌ WebSocket error for {user.username}: {e}", exc_info=True)
+    """
+    """
+    Endpoint WebSocket simplifié pour debug
+    """
+    logger.info(f"🔌 WebSocket connection received, token: {token is not None}")
+    
+    # ✅ ACCEPTER LA CONNEXION IMMÉDIATEMENT (sans auth pour tester)
+    await websocket.accept()
+    logger.info("✅ WebSocket accepted (auth disabled for debug)")
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            logger.info(f"📬 Received: {data}")
+            await websocket.send_text(f"Echo: {data}")
+            
+    except WebSocketDisconnect:
+        logger.info("🔌 WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"❌ WebSocket error: {e}", exc_info=True)
 
 
 # ============================================================================

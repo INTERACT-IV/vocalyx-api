@@ -4,8 +4,10 @@ Dépendances FastAPI pour l'authentification et l'accès DB
 """
 
 import secrets
+import logging
 from typing import Optional
 from fastapi import Depends, HTTPException, status, Header, Form, WebSocket, Query
+from fastapi import WebSocketException, status as ws_status
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 
@@ -14,6 +16,7 @@ from config import Config
 from api import auth
 
 config = Config()
+logger = logging.getLogger(__name__)
 
 def get_db():
     """Dépendance pour obtenir une session de base de données"""
@@ -125,33 +128,40 @@ def verify_admin_key(
 
 async def get_user_from_websocket(
     websocket: WebSocket,
-    token: Optional[str] = Query(None), # Lire le token depuis ?token=...
+    token: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ) -> User:
     """
     Dépendance d'authentification pour les WebSockets.
     Récupère le token JWT depuis le paramètre 'token' de la query string.
     """
-    
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials from token",
+    logger.info(f"🔐 WebSocket auth attempt, token provided: {token is not None}")
+    # ✅ MODIFICATION: Utiliser WebSocketException au lieu de HTTPException
+    credentials_exception = WebSocketException(
+        code=ws_status.WS_1008_POLICY_VIOLATION,
+        reason="Could not validate credentials"
     )
     
     if token is None:
+        logger.error("❌ WebSocket auth failed: No token in query string")
         raise credentials_exception
     
+    logger.info(f"🔑 Token (first 20 chars): {token[:20]}...")
+    
     try:
-        # Utilise la logique d'authentification standard de l'API
         payload = jwt.decode(token, auth.JWT_SECRET_KEY, algorithms=[auth.JWT_ALGORITHM])
         username: str = payload.get("sub")
+        logger.info(f"✅ JWT decoded successfully, username: {username}")
         if username is None:
             raise credentials_exception
-    except JWTError:
+    except JWTError as e:
+        logger.warning(f"WebSocket: JWT decode failed: {e}")
         raise credentials_exception
     
     user = db.query(User).filter(User.username == username).first()
     if user is None:
+        logger.warning(f"WebSocket: User '{username}' not found in DB")
         raise credentials_exception
     
+    logger.info(f"✅ WebSocket: User '{username}' authenticated successfully")
     return user
