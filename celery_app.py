@@ -98,24 +98,24 @@ def get_celery_stats():
         dict: Statistiques Celery
     """
     try:
-        # On a besoin des deux : control pour envoyer, inspect pour lire
         control = celery_app.control
-        inspect = control.inspect()
+        # --- MODIFICATION 1: Ajouter un timeout à l'inspecteur ---
+        inspect = control.inspect(timeout=1.0) 
         
-        # Workers actifs
-        active_workers = inspect.active()
-        registered_tasks = inspect.registered()
-        stats = inspect.stats()
+        # --- MODIFICATION 2: Ajouter 'or {}' pour éviter les crashs (NoneType) ---
+        active_workers = inspect.active() or {}
+        registered_tasks = inspect.registered() or {}
+        stats = inspect.stats() or {}
 
-        # Lancer une commande de contrôle broadcast pour 'get_worker_health'
-        # Le timeout est crucial pour ne pas bloquer l'API (1 seconde max)
         health_responses = None
         try:
-            health_responses = control.broadcast('get_worker_health', reply=True, timeout=1.0)
+            # Isoler le broadcast, car c'est lui qui échoue le plus
+            if stats: # Ne pas faire de broadcast si aucun worker n'est visible
+                health_responses = control.broadcast('get_worker_health', reply=True, timeout=1.0)
         except Exception as e:
             logger.warning(f"Erreur lors du broadcast 'get_worker_health': {e}")
+            # Ne pas planter toute la fonction si le broadcast échoue
 
-        # Fusionner les health_responses dans stats
         if health_responses:
             for response in health_responses:
                 for worker_name, health_data in response.items():
@@ -124,7 +124,7 @@ def get_celery_stats():
                         stats[worker_name]['health'] = health_data
         
         # Compter les workers
-        worker_count = len(active_workers) if active_workers else 0
+        worker_count = len(active_workers) # Plus besoin de 'if active_workers else 0'
         
         # Compter les tâches actives
         active_task_count = 0
@@ -135,16 +135,21 @@ def get_celery_stats():
         return {
             "worker_count": worker_count,
             "active_tasks": active_task_count,
-            "workers": active_workers or {},
-            "registered_tasks": registered_tasks or {},
-            "stats": stats or {}
+            "workers": active_workers, # 'active_workers' est garanti d'être un dict
+            "registered_tasks": registered_tasks,
+            "stats": stats
         }
     except Exception as e:
-        logger.error(f"Error getting Celery stats: {e}")
+        # Gérer les erreurs de connexion au broker (ex: Redis déconnecté)
+        logger.error(f"Erreur majeure dans get_celery_stats (Broker inaccessible?): {e}", exc_info=True)
+        # Retourner un état d'erreur clair
         return {
             "worker_count": 0,
             "active_tasks": 0,
-            "error": str(e)
+            "workers": {},
+            "registered_tasks": {},
+            "stats": {},
+            "error": f"Failed to inspect Celery: {str(e)}"
         }
 
 def get_task_status(task_id: str):
