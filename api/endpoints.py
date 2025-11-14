@@ -828,10 +828,12 @@ def list_workers(
     stats = get_celery_stats() 
     
     try:
+        # ✅ REQUÊTE SQL : Calculer les stats par worker depuis la DB
         db_stats_query = db.query(
             Transcription.worker_id,
             func.sum(Transcription.duration).label('total_audio_s'),
-            func.sum(Transcription.processing_time).label('total_processing_s')
+            func.sum(Transcription.processing_time).label('total_processing_s'),
+            func.count(Transcription.id).label('total_jobs')
         ).filter(
             Transcription.worker_id != None,
             Transcription.status == 'done'
@@ -839,28 +841,47 @@ def list_workers(
             Transcription.worker_id
         ).all()
 
-        db_stats_dict = {
-            row.worker_id: {
-                'total_audio_processed_s': row.total_audio_s or 0,
-                'total_processing_time_s': row.total_processing_s or 0
+        # Convertir en dictionnaire
+        db_stats_dict = {}
+        for row in db_stats_query:
+            db_stats_dict[row.worker_id] = {
+                'total_audio_processed_s': float(row.total_audio_s or 0),
+                'total_processing_time_s': float(row.total_processing_s or 0),
+                'total_jobs_completed': int(row.total_jobs or 0)
             }
-            for row in db_stats_query
-        }
         
+        logger.info(f"📊 Stats DB calculées pour {len(db_stats_dict)} workers: {db_stats_dict}")
+        
+        # ✅ INJECTION : Injecter les stats DB dans les stats Celery
         if stats.get('stats'):
             for worker_name, worker_data in stats['stats'].items():
+                # Extraire le nom simple du worker (ex: "worker-01@host" -> "worker-01")
                 simple_name = worker_name.split('@')[0]
+                
                 if simple_name in db_stats_dict:
                     worker_data['db_stats'] = db_stats_dict[simple_name]
+                    logger.debug(f"  ✅ Stats DB injectées pour {simple_name}: {db_stats_dict[simple_name]}")
                 else:
+                    # Worker sans stats DB (nouveau ou aucune tâche terminée)
                     worker_data['db_stats'] = {
-                        'total_audio_processed_s': 0,
-                        'total_processing_time_s': 0
+                        'total_audio_processed_s': 0.0,
+                        'total_processing_time_s': 0.0,
+                        'total_jobs_completed': 0
                     }
+                    logger.debug(f"  ℹ️ Aucune stat DB pour {simple_name}, valeurs par défaut")
 
     except Exception as e:
-        logger.error(f"Erreur lors de la récupération des stats DB: {e}")
+        logger.error(f"❌ Erreur lors du calcul des stats DB: {e}", exc_info=True)
+        # En cas d'erreur, mettre des valeurs par défaut
+        if stats.get('stats'):
+            for worker_name, worker_data in stats['stats'].items():
+                worker_data['db_stats'] = {
+                    'total_audio_processed_s': 0.0,
+                    'total_processing_time_s': 0.0,
+                    'total_jobs_completed': 0
+                }
 
+    logger.info(f"📤 Envoi des stats workers avec DB stats: {len(stats.get('stats', {}))} workers")
     return stats
 
 # ============================================================================
