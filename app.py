@@ -49,22 +49,15 @@ async def redis_pubsub_listener(redis_sub, manager: ConnectionManager):
         logger.info("📡 Abonné au canal Redis 'vocalyx_updates'")
         async for message in redis_sub.listen():
             if message["type"] == "message":
-                logger.info("📬 Message Pub/Sub reçu, diffusion du nouvel état...")
+                logger.info("📬 Message Pub/Sub reçu, diffusion d'un trigger...")
                 
-                # --- MODIFICATION ---
-                try:
-                    # Au lieu d'un simple trigger, on récupère et envoie tout l'état
-                    state = await get_dashboard_state()
-                    
-                    # On utilise un nouveau type de message
-                    await manager.broadcast({
-                        "type": "dashboard_update", 
-                        "data": state
-                    })
-                    logger.info("-> Nouvel état du dashboard diffusé à tous les clients.")
-                except Exception as e:
-                    logger.error(f"❌ Erreur lors de la diffusion de l'état: {e}", exc_info=True)
-                # --- FIN MODIFICATION ---
+                # Envoyer un simple trigger. Le client demandera
+                # les données mises à jour avec ses filtres actuels.
+                await manager.broadcast({
+                    "type": "transcription_update_trigger"
+                })
+                logger.info("-> Trigger de mise à jour diffusé à tous les clients.")
+
                             
     except asyncio.CancelledError:
         logger.info("🛑 Tâche Pub/Sub annulée.")

@@ -5,7 +5,8 @@ Endpoints de l'API centrale
 
 import uuid
 import logging
-import asyncio # AJOUT
+import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -20,11 +21,11 @@ from database import User
 from api import auth, schemas
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, exc # Assurez-vous que 'func' est importé
+from sqlalchemy import func, exc, or_
 
 from jose import JWTError, jwt
 
-from database import Transcription, Project, User, SessionLocal # AJOUT SessionLocal
+from database import Transcription, Project, User, SessionLocal
 from api.dependencies import (
     get_db, verify_project_key, verify_internal_key, verify_admin_key,
     get_user_from_websocket
@@ -54,23 +55,53 @@ admin_router = APIRouter(
 # NOUVELLE FONCTION HELPER (PARTAGÉE)
 # ============================================================================
 
-async def get_dashboard_state() -> dict:
+async def get_dashboard_state(filters: dict) -> dict:
     """
     Fonction helper pour récupérer l'état complet du dashboard.
     Exécute les requêtes bloquantes (DB, Celery) dans des threads.
     """
-    logger.debug("Appel de get_dashboard_state...")
-    db = SessionLocal() # Session manuelle pour l'async
+    logger.info(f"-> get_dashboard_state: Démarrage avec filtres: {filters}")
+    
+    page = filters.get("page", 1)
+    limit = filters.get("limit", 25)
+    status = filters.get("status")
+    project = filters.get("project")
+    search = filters.get("search")
+    
+    offset = (page - 1) * limit
+    
+    db = SessionLocal() 
+    logger.info("-> get_dashboard_state: Session DB créée.")
 
     def get_db_data_sync():
         """Fonction synchrone à exécuter dans un thread"""
         try:
-            # 1. Compte des Transcriptions
-            total_filtered = db.query(Transcription).count()
+            logger.info("-> get_db_data_sync: Démarrage...")
+            filtered_query = db.query(Transcription)
+            if status:
+                filtered_query = filtered_query.filter(Transcription.status == status)
+            if project:
+                filtered_query = filtered_query.filter(Transcription.project_name == project)
+            if search:
+                search_term = f"%{search}%"
+                filtered_query = filtered_query.filter(
+                    or_(
+                        Transcription.id.ilike(search_term),
+                        Transcription.file_path.ilike(search_term),
+                        Transcription.text.ilike(search_term)
+                    )
+                )
+            
+            logger.info("-> get_db_data_sync: Exécution de la requête .count()...")
+            total_filtered = filtered_query.count()
+            logger.info(f"-> get_db_data_sync: .count() terminé. Total: {total_filtered}")
+
+            logger.info("-> get_db_data_sync: Exécution de la requête group_by(status)...")
             grouped_counts_db = db.query(
                 Transcription.status,
                 func.count(Transcription.id)
             ).group_by(Transcription.status).all()
+            logger.info("-> get_db_data_sync: group_by(status) terminé.")
             
             count_result = {
                 "total_filtered": total_filtered,
@@ -81,38 +112,44 @@ async def get_dashboard_state() -> dict:
                     count_result[s] = count
                     count_result["total_global"] += count
 
-            # 2. Transcriptions Récentes (Page 1)
-            transcriptions_db = db.query(Transcription).order_by(
+            logger.info("-> get_db_data_sync: Exécution de la requête principale (limit/offset)...")
+            transcriptions_db = filtered_query.order_by(
                 Transcription.created_at.desc()
-            ).limit(25).offset(0).all()
+            ).limit(limit).offset(offset).all()
+            logger.info("-> get_db_data_sync: Requête principale terminée.")
+            
             transcription_list = [t.to_dict() for t in transcriptions_db]
-
+            
+            logger.info("-> get_db_data_sync: Terminé avec succès.")
             return {
                 "transcription_count": count_result,
                 "transcriptions": transcription_list
             }
         except Exception as e:
-            logger.error(f"Erreur DB dans get_db_data_sync: {e}", exc_info=True)
+            logger.error(f"-> get_db_data_sync: Erreur DB: {e}", exc_info=True)
             return {"transcription_count": {}, "transcriptions": []}
         finally:
-            db.close() # Toujours fermer la session
+            logger.info("-> get_db_data_sync: Fermeture de la session DB.")
+            db.close() 
 
-    # Exécuter les tâches Celery (synchrone) et DB (synchrone)
-    # en parallèle dans des threads séparés
+    logger.info("-> get_dashboard_state: Lancement de get_celery_stats dans un thread...")
     stats_task = asyncio.to_thread(get_celery_stats)
+    
+    logger.info("-> get_dashboard_state: Lancement de get_db_data_sync dans un thread...")
     db_task = asyncio.to_thread(get_db_data_sync)
 
-    # Attendre les deux résultats
+    logger.info("-> get_dashboard_state: Attente de asyncio.gather (Celery + DB)...")
     try:
         worker_stats_result, db_data_result = await asyncio.gather(stats_task, db_task)
+        logger.info("-> get_dashboard_state: asyncio.gather terminé.")
     except Exception as e:
-        logger.error(f"Erreur lors de asyncio.gather dans get_dashboard_state: {e}", exc_info=True)
-        # S'assurer que db est fermé même si gather échoue (bien que db_task le gère)
+        logger.error(f"-> get_dashboard_state: Erreur lors de asyncio.gather: {e}", exc_info=True)
         if db.is_active:
             db.close()
         raise
 
     # Combiner les résultats
+    logger.info("-> get_dashboard_state: Combinaison des résultats...")
     return {
         "worker_stats": worker_stats_result,
         "transcription_count": db_data_result["transcription_count"],
@@ -144,6 +181,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Créer une session DB manuelle
     db = SessionLocal()
     manager = websocket.app.state.ws_manager
+    user = None
     
     try:
         # ✅ ÉTAPE 2: Récupérer le token
@@ -152,10 +190,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         if token is None:
             logger.warning("WebSocket: ❌ Aucun token fourni")
-            await websocket.send_json({
-                "type": "error",
-                "message": "Authentication required"
-            })
+            await websocket.send_json({"type": "error", "message": "Authentication required"})
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         
@@ -169,10 +204,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
             if username is None:
                 logger.warning("WebSocket: ❌ 'sub' manquant dans le JWT")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Invalid token format"
-                })
+                await websocket.send_json({"type": "error", "message": "Invalid token format"})
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
             
@@ -180,10 +212,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
         except JWTError as e:
             logger.error(f"WebSocket: ❌ Erreur JWT: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Invalid or expired token: {str(e)}"
-            })
+            await websocket.send_json({"type": "error", "message": f"Invalid or expired token: {str(e)}"})
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         
@@ -193,10 +222,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         if user is None:
             logger.warning(f"WebSocket: ❌ Utilisateur '{username}' non trouvé dans la DB")
-            await websocket.send_json({
-                "type": "error",
-                "message": "User not found"
-            })
+            await websocket.send_json({"type": "error", "message": "User not found"})
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         
@@ -209,27 +235,34 @@ async def websocket_endpoint(websocket: WebSocket):
         # ✅ ÉTAPE 6: Envoyer l'état initial
         try:
             logger.info(f"WebSocket: 📊 Récupération de l'état initial du dashboard...")
-            initial_state = await get_dashboard_state()
+            default_filters = {"page": 1, "limit": 25, "status": None, "project": None, "search": None}
+            initial_state = await get_dashboard_state(default_filters)
             
             logger.info(f"WebSocket: 📤 Envoi de l'état initial à '{user.username}'...")
-            await websocket.send_json({
-                "type": "initial_dashboard_state", 
-                "data": initial_state
-            })
+            await websocket.send_json({"type": "initial_dashboard_state", "data": initial_state})
             logger.info(f"WebSocket: ✅ État initial envoyé avec succès !")
+
         except Exception as e:
             logger.error(f"WebSocket: ❌ Erreur lors de l'envoi de l'état initial: {e}", exc_info=True)
-            await websocket.send_json({
-                "type": "error",
-                "message": "Failed to load initial state"
-            })
+            await websocket.send_json({"type": "error", "message": "Failed to load initial state"})
         
         # ✅ ÉTAPE 7: Boucle keep-alive
         logger.info(f"WebSocket: ♾️  Entrée dans la boucle keep-alive pour '{user.username}'")
         while True:
             try:
-                data = await websocket.receive_text()
-                logger.debug(f"WebSocket: Message reçu de '{user.username}': {data[:50]}...")
+                data = await websocket.receive_json()
+                logger.debug(f"WebSocket: Message JSON reçu de '{user.username}': {data.get('type')}")
+                
+                if data.get("type") == "get_dashboard_state":
+                    payload = data.get("payload", {})
+                    logger.info(f"WebSocket: Demande 'get_dashboard_state' reçue avec payload: {payload}")
+                    
+                    # Récupérer l'état filtré
+                    filtered_state = await get_dashboard_state(payload)
+                    
+                    logger.info("WebSocket: État filtré récupéré. Envoi au client...")
+                    await websocket.send_json({"type": "dashboard_state_update", "data": filtered_state})
+                    logger.info("WebSocket: État filtré envoyé au client.")
             except WebSocketDisconnect:
                 logger.info(f"WebSocket: 👋 Client '{user.username}' déconnecté proprement")
                 break
@@ -242,15 +275,13 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket: ❌ Erreur critique: {e}", exc_info=True)
         try:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Internal server error"
-            })
+            await websocket.send_json({"type": "error", "message": "Internal server error"})
         except:
             logger.warning("WebSocket: Impossible d'envoyer le message d'erreur (connexion fermée)")
     finally:
         # ✅ ÉTAPE 8: Nettoyage
-        logger.info("WebSocket: 🧹 Nettoyage des ressources...")
+        username_log = user.username if user else "Client inconnu"
+        logger.info(f"WebSocket: 🧹 Nettoyage des ressources pour '{username_log}'...")
         db.close()
         manager.disconnect(websocket)
         logger.info("WebSocket: ✅ Connexion fermée et nettoyée")
