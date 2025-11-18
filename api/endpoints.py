@@ -52,10 +52,28 @@ admin_router = APIRouter(
 )
 
 # ============================================================================
-# NOUVELLE FONCTION HELPER (PARTAGÉE)
+# NOUVELLES FONCTIONS HELPERS (PARTAGÉES)
 # ============================================================================
 
-async def get_dashboard_state(filters: dict) -> dict:
+def _load_user_with_projects(db: Session, user_id: str) -> User:
+    return (
+        db.query(User)
+        .options(joinedload(User.projects))
+        .filter(User.id == user_id)
+        .first()
+    )
+
+
+def _get_allowed_project_names(db: Session, current_user: User) -> Optional[List[str]]:
+    if current_user.is_admin:
+        return None
+    user = _load_user_with_projects(db, current_user.id)
+    if not user:
+        return []
+    return [project.name for project in user.projects]
+
+
+async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str]] = None) -> dict:
     """
     Fonction helper pour récupérer l'état complet du dashboard.
     Exécute les requêtes bloquantes (DB, Celery) dans des threads.
@@ -78,6 +96,29 @@ async def get_dashboard_state(filters: dict) -> dict:
         try:
             logger.info("-> get_db_data_sync: Démarrage...")
             filtered_query = db.query(Transcription)
+            if allowed_projects is not None:
+                if not allowed_projects:
+                    logger.info("-> get_db_data_sync: Aucun projet autorisé, retour à vide.")
+                    return {
+                        "transcription_count": {
+                            "total_filtered": 0,
+                            "pending": 0, "processing": 0, "done": 0, "error": 0, "total_global": 0
+                        },
+                        "transcriptions": [],
+                        "db_worker_stats": {}
+                    }
+                if project and project not in allowed_projects:
+                    logger.info("-> get_db_data_sync: Projet non autorisé demandé.")
+                    return {
+                        "transcription_count": {
+                            "total_filtered": 0,
+                            "pending": 0, "processing": 0, "done": 0, "error": 0, "total_global": 0
+                        },
+                        "transcriptions": [],
+                        "db_worker_stats": {}
+                    }
+                filtered_query = filtered_query.filter(Transcription.project_name.in_(allowed_projects))
+
             if status:
                 filtered_query = filtered_query.filter(Transcription.status == status)
             if project:
@@ -119,11 +160,36 @@ async def get_dashboard_state(filters: dict) -> dict:
             logger.info("-> get_db_data_sync: Requête principale terminée.")
             
             transcription_list = [t.to_dict() for t in transcriptions_db]
+
+            logger.info("-> get_db_data_sync: Exécution de la requête stats_db_par_worker...")
+            db_stats_query = db.query(
+                Transcription.worker_id,
+                func.sum(Transcription.duration).label('total_audio_s'),
+                func.sum(Transcription.processing_time).label('total_processing_s')
+            ).filter(
+                Transcription.worker_id != None,
+                Transcription.status == 'done'
+            )
+            if allowed_projects is not None:
+                db_stats_query = db_stats_query.filter(Transcription.project_name.in_(allowed_projects))
+            db_stats_query = db_stats_query.group_by(
+                Transcription.worker_id
+            ).all()
+            logger.info("-> get_db_data_sync: Requête stats_db_par_worker terminée.")
+
+            db_stats_dict = {
+                row.worker_id: {
+                    'total_audio_processed_s': row.total_audio_s or 0,
+                    'total_processing_time_s': row.total_processing_s or 0
+                }
+                for row in db_stats_query
+            }
             
             logger.info("-> get_db_data_sync: Terminé avec succès.")
             return {
                 "transcription_count": count_result,
-                "transcriptions": transcription_list
+                "transcriptions": transcription_list,
+                "db_worker_stats": db_stats_dict
             }
         except Exception as e:
             logger.error(f"-> get_db_data_sync: Erreur DB: {e}", exc_info=True)
@@ -147,6 +213,22 @@ async def get_dashboard_state(filters: dict) -> dict:
         if db.is_active:
             db.close()
         raise
+
+    # Fusionner les stats DB dans les stats Celery
+    logger.info("-> get_dashboard_state: Fusion des stats DB et Celery...")
+    if worker_stats_result.get('stats') and db_data_result.get('db_worker_stats'):
+        db_stats_map = db_data_result['db_worker_stats']
+        for worker_name, worker_data in worker_stats_result['stats'].items():
+            simple_name = worker_name.split('@')[0]
+            if simple_name in db_stats_map:
+                worker_data['db_stats'] = db_stats_map[simple_name]
+            else:
+                # S'assurer que 'db_stats' existe toujours
+                worker_data['db_stats'] = {
+                    'total_audio_processed_s': 0,
+                    'total_processing_time_s': 0
+                }
+    logger.info("-> get_dashboard_state: Fusion terminée.")
 
     # Combiner les résultats
     logger.info("-> get_dashboard_state: Combinaison des résultats...")
@@ -227,6 +309,7 @@ async def websocket_endpoint(websocket: WebSocket):
             return
         
         logger.info(f"WebSocket: ✅✅✅ Client '{user.username}' AUTHENTIFIÉ AVEC SUCCÈS !")
+        allowed_projects = _get_allowed_project_names(db, user)
         
         # ✅ ÉTAPE 5: Enregistrer dans le manager
         await manager.connect(websocket)
@@ -236,7 +319,7 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             logger.info(f"WebSocket: 📊 Récupération de l'état initial du dashboard...")
             default_filters = {"page": 1, "limit": 25, "status": None, "project": None, "search": None}
-            initial_state = await get_dashboard_state(default_filters)
+            initial_state = await get_dashboard_state(default_filters, allowed_projects=allowed_projects)
             
             logger.info(f"WebSocket: 📤 Envoi de l'état initial à '{user.username}'...")
             await websocket.send_json({"type": "initial_dashboard_state", "data": initial_state})
@@ -258,7 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.info(f"WebSocket: Demande 'get_dashboard_state' reçue avec payload: {payload}")
                     
                     # Récupérer l'état filtré
-                    filtered_state = await get_dashboard_state(payload)
+                    filtered_state = await get_dashboard_state(payload, allowed_projects=allowed_projects)
                     
                     logger.info("WebSocket: État filtré récupéré. Envoi au client...")
                     await websocket.send_json({"type": "dashboard_state_update", "data": filtered_state})
@@ -316,6 +399,12 @@ async def login_for_access_token(
     access_token = auth.create_access_token(
         data=token_data, expires_delta=access_token_expires
     )
+
+    # Mettre à jour la dernière connexion
+    user.last_login_at = datetime.utcnow()
+    db.add(user)
+    db.commit()
+    db.refresh(user)
     
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -507,6 +596,39 @@ def create_project(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create project: {str(e)}"
         )
+
+@router.get("/user/projects", response_model=List[ProjectDetails], tags=["Projects"])
+def list_user_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """
+    Liste les projets accessibles pour l'utilisateur courant (avec clés API).
+    - Admins récupèrent l'intégralité des projets.
+    - Les utilisateurs standard ne voient que les projets qui leur sont assignés.
+    """
+    if current_user.is_admin:
+        projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    else:
+        user = _load_user_with_projects(db, current_user.id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        projects = list(user.projects)
+    
+    return [p.to_dict_with_key() for p in projects]
+
+
+@router.get("/user/me", response_model=schemas.UserResponse, tags=["Users"])
+def get_user_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Retourne le profil de l'utilisateur courant."""
+    user = _load_user_with_projects(db, current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
 
 @router.get("/projects", response_model=List[ProjectResponse], tags=["Projects"])
 def list_projects(
@@ -731,6 +853,137 @@ def get_transcription(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Transcription '{transcription_id}' not found"
+        )
+    
+    return transcription.to_dict()
+
+
+@router.get("/user/transcriptions", response_model=List[TranscriptionResponse], tags=["Transcriptions"])
+def list_user_transcriptions(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """
+    Liste les transcriptions auxquelles l'utilisateur courant peut accéder.
+    """
+    query = db.query(Transcription)
+    allowed_projects = _get_allowed_project_names(db, current_user)
+    if allowed_projects is not None:
+        if not allowed_projects:
+            return []
+        query = query.filter(Transcription.project_name.in_(allowed_projects))
+    
+    if status:
+        query = query.filter(Transcription.status == status)
+    if project:
+        if allowed_projects is not None and project not in allowed_projects:
+            return []
+        query = query.filter(Transcription.project_name == project)
+    if search:
+        query = query.filter(Transcription.text.ilike(f"%{search}%"))
+    
+    offset = (page - 1) * limit
+    transcriptions = query.order_by(
+        Transcription.created_at.desc()
+    ).limit(limit).offset(offset).all()
+    
+    return [t.to_dict() for t in transcriptions]
+
+
+@router.get("/user/transcriptions/count", response_model=TranscriptionCountResponse, tags=["Transcriptions"])
+def count_user_transcriptions(
+    status: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """
+    Compte les transcriptions accessibles à l'utilisateur courant.
+    """
+    allowed_projects = _get_allowed_project_names(db, current_user)
+    if allowed_projects is not None and not allowed_projects:
+        return {
+            "total_filtered": 0,
+            "pending": 0,
+            "processing": 0,
+            "done": 0,
+            "error": 0,
+            "total_global": 0
+        }
+    
+    filtered_query = db.query(Transcription)
+    if allowed_projects is not None:
+        filtered_query = filtered_query.filter(Transcription.project_name.in_(allowed_projects))
+    if status:
+        filtered_query = filtered_query.filter(Transcription.status == status)
+    if project:
+        if allowed_projects is not None and project not in allowed_projects:
+            return {
+                "total_filtered": 0,
+                "pending": 0,
+                "processing": 0,
+                "done": 0,
+                "error": 0,
+                "total_global": 0
+            }
+        filtered_query = filtered_query.filter(Transcription.project_name == project)
+    if search:
+        filtered_query = filtered_query.filter(Transcription.text.ilike(f"%{search}%"))
+    
+    total_filtered = filtered_query.count()
+    
+    grouped_counts = filtered_query.with_entities(
+        Transcription.status,
+        func.count(Transcription.id)
+    ).group_by(Transcription.status).all()
+    
+    result = {
+        "total_filtered": total_filtered,
+        "pending": 0,
+        "processing": 0,
+        "done": 0,
+        "error": 0,
+        "total_global": 0
+    }
+    
+    for s, count in grouped_counts:
+        if s in result:
+            result[s] = count
+            result["total_global"] += count
+    
+    return result
+
+
+@router.get("/user/transcriptions/{transcription_id}", response_model=TranscriptionResponse, tags=["Transcriptions"])
+def get_user_transcription(
+    transcription_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """
+    Récupère une transcription si l'utilisateur y a accès.
+    """
+    transcription = db.query(Transcription).filter(
+        Transcription.id == transcription_id
+    ).first()
+    
+    if not transcription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transcription '{transcription_id}' not found"
+        )
+    
+    allowed_projects = _get_allowed_project_names(db, current_user)
+    if allowed_projects is not None and transcription.project_name not in allowed_projects:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access to this transcription is forbidden"
         )
     
     return transcription.to_dict()

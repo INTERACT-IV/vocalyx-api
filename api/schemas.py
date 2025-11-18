@@ -109,12 +109,19 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: str
     created_at: Optional[datetime] = None
+    last_login_at: Optional[datetime] = None
     is_admin: bool
-    projects: List[ProjectResponse] = []
+    projects: List[ProjectResponse] = Field(default_factory=list)
 
     # ✅ AJOUT : Sérialiseur pour convertir datetime en string ISO
     @field_serializer('created_at')
     def serialize_created_at(self, dt: Optional[datetime], _info):
+        if dt is None:
+            return None
+        return dt.isoformat()
+
+    @field_serializer('last_login_at')
+    def serialize_last_login_at(self, dt: Optional[datetime], _info):
         if dt is None:
             return None
         return dt.isoformat()

@@ -89,6 +89,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     is_admin = Column(Boolean, default=False, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
     
     projects = relationship(
         "Project",
@@ -101,7 +102,8 @@ class User(Base):
             "id": self.id,
             "username": self.username,
             "is_admin": self.is_admin,
-            "created_at": self.created_at.isoformat() if self.created_at else None
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_login_at": self.last_login_at.isoformat() if self.last_login_at else None
         }
 
 class Transcription(Base):
