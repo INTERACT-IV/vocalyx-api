@@ -72,6 +72,7 @@ class TranscriptionResponse(BaseModel):
     error_message: Optional[str] = None
     segments_count: Optional[int] = None
     vad_enabled: Optional[bool] = None
+    diarization_enabled: Optional[bool] = None
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
 

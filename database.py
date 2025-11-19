@@ -136,6 +136,7 @@ class Transcription(Base):
     
     # Options
     vad_enabled = Column(Integer, default=0)
+    diarization_enabled = Column(Integer, default=0)
     enrichment_requested = Column(Integer, default=1)
     
     # Timestamps
@@ -170,6 +171,7 @@ class Transcription(Base):
             "error_message": self.error_message,
             "segments_count": self.segments_count,
             "vad_enabled": bool(self.vad_enabled),
+            "diarization_enabled": bool(self.diarization_enabled),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
