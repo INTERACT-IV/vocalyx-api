@@ -139,7 +139,10 @@ class Config:
             self.config.get('LOGGING', 'level', fallback='INFO')
         )
         self.log_file_enabled = self.config.getboolean('LOGGING', 'file_enabled', fallback=True)
-        self.log_file_path = self.config.get('LOGGING', 'file_path', fallback='logs/vocalyx-api.log')
+        self.log_file_path = os.environ.get(
+            'LOG_FILE_PATH',
+            self.config.get('LOGGING', 'file_path', fallback='logs/vocalyx-api.log')
+        )
         
         # LOG_COLORED est particulier, car "false" en string est True en boolean
         log_colored_str = os.environ.get(
