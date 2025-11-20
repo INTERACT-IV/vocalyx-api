@@ -73,32 +73,49 @@ def _get_allowed_project_names(db: Session, current_user: User) -> Optional[List
     return [project.name for project in user.projects]
 
 
-async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str]] = None) -> dict:
-    """
-    Fonction helper pour récupérer l'état complet du dashboard.
-    Exécute les requêtes bloquantes (DB, Celery) dans des threads.
-    """
-    logger.info(f"-> get_dashboard_state: Démarrage avec filtres: {filters}")
-    
-    page = filters.get("page", 1)
-    limit = filters.get("limit", 25)
-    status = filters.get("status")
-    project = filters.get("project")
-    search = filters.get("search")
-    
-    offset = (page - 1) * limit
-    
-    db = SessionLocal() 
-    logger.info("-> get_dashboard_state: Session DB créée.")
+def _get_db_worker_stats(allowed_projects, db_session):
+    """Récupère uniquement les stats DB par worker"""
+    try:
+        db_stats_query = db_session.query(
+            Transcription.worker_id,
+            func.sum(Transcription.duration).label('total_audio_s'),
+            func.sum(Transcription.processing_time).label('total_processing_s')
+        ).filter(
+            Transcription.worker_id != None,
+            Transcription.status == 'done'
+        )
+        if allowed_projects is not None:
+            db_stats_query = db_stats_query.filter(Transcription.project_name.in_(allowed_projects))
+        db_stats_query = db_stats_query.group_by(
+            Transcription.worker_id
+        ).all()
 
-    def get_db_data_sync():
-        """Fonction synchrone à exécuter dans un thread"""
+        return {
+            row.worker_id: {
+                'total_audio_processed_s': row.total_audio_s or 0,
+                'total_processing_time_s': row.total_processing_s or 0
+            }
+            for row in db_stats_query
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des stats DB par worker: {e}", exc_info=True)
+        return {}
+
+def _get_db_data_sync_internal(filters, allowed_projects, db_session):
+        """Fonction interne pour récupérer les données DB"""
+        page = filters.get("page", 1)
+        limit = filters.get("limit", 25)
+        status = filters.get("status")
+        project = filters.get("project")
+        search = filters.get("search")
+        offset = (page - 1) * limit
+        
         try:
-            logger.info("-> get_db_data_sync: Démarrage...")
-            filtered_query = db.query(Transcription)
+            logger.info("-> _get_db_data_sync_internal: Démarrage...")
+            filtered_query = db_session.query(Transcription)
             if allowed_projects is not None:
                 if not allowed_projects:
-                    logger.info("-> get_db_data_sync: Aucun projet autorisé, retour à vide.")
+                    logger.info("-> _get_db_data_sync_internal: Aucun projet autorisé, retour à vide.")
                     return {
                         "transcription_count": {
                             "total_filtered": 0,
@@ -108,7 +125,7 @@ async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str
                         "db_worker_stats": {}
                     }
                 if project and project not in allowed_projects:
-                    logger.info("-> get_db_data_sync: Projet non autorisé demandé.")
+                    logger.info("-> _get_db_data_sync_internal: Projet non autorisé demandé.")
                     return {
                         "transcription_count": {
                             "total_filtered": 0,
@@ -133,16 +150,16 @@ async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str
                     )
                 )
             
-            logger.info("-> get_db_data_sync: Exécution de la requête .count()...")
+            logger.info("-> _get_db_data_sync_internal: Exécution de la requête .count()...")
             total_filtered = filtered_query.count()
-            logger.info(f"-> get_db_data_sync: .count() terminé. Total: {total_filtered}")
+            logger.info(f"-> _get_db_data_sync_internal: .count() terminé. Total: {total_filtered}")
 
-            logger.info("-> get_db_data_sync: Exécution de la requête group_by(status)...")
-            grouped_counts_db = db.query(
+            logger.info("-> _get_db_data_sync_internal: Exécution de la requête group_by(status)...")
+            grouped_counts_db = db_session.query(
                 Transcription.status,
                 func.count(Transcription.id)
             ).group_by(Transcription.status).all()
-            logger.info("-> get_db_data_sync: group_by(status) terminé.")
+            logger.info("-> _get_db_data_sync_internal: group_by(status) terminé.")
             
             count_result = {
                 "total_filtered": total_filtered,
@@ -153,16 +170,16 @@ async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str
                     count_result[s] = count
                     count_result["total_global"] += count
 
-            logger.info("-> get_db_data_sync: Exécution de la requête principale (limit/offset)...")
+            logger.info("-> _get_db_data_sync_internal: Exécution de la requête principale (limit/offset)...")
             transcriptions_db = filtered_query.order_by(
                 Transcription.created_at.desc()
             ).limit(limit).offset(offset).all()
-            logger.info("-> get_db_data_sync: Requête principale terminée.")
+            logger.info("-> _get_db_data_sync_internal: Requête principale terminée.")
             
             transcription_list = [t.to_dict() for t in transcriptions_db]
 
-            logger.info("-> get_db_data_sync: Exécution de la requête stats_db_par_worker...")
-            db_stats_query = db.query(
+            logger.info("-> _get_db_data_sync_internal: Exécution de la requête stats_db_par_worker...")
+            db_stats_query = db_session.query(
                 Transcription.worker_id,
                 func.sum(Transcription.duration).label('total_audio_s'),
                 func.sum(Transcription.processing_time).label('total_processing_s')
@@ -175,7 +192,7 @@ async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str
             db_stats_query = db_stats_query.group_by(
                 Transcription.worker_id
             ).all()
-            logger.info("-> get_db_data_sync: Requête stats_db_par_worker terminée.")
+            logger.info("-> _get_db_data_sync_internal: Requête stats_db_par_worker terminée.")
 
             db_stats_dict = {
                 row.worker_id: {
@@ -185,15 +202,42 @@ async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str
                 for row in db_stats_query
             }
             
-            logger.info("-> get_db_data_sync: Terminé avec succès.")
+            logger.info("-> _get_db_data_sync_internal: Terminé avec succès.")
             return {
                 "transcription_count": count_result,
                 "transcriptions": transcription_list,
                 "db_worker_stats": db_stats_dict
             }
         except Exception as e:
-            logger.error(f"-> get_db_data_sync: Erreur DB: {e}", exc_info=True)
-            return {"transcription_count": {}, "transcriptions": []}
+            logger.error(f"-> _get_db_data_sync_internal: Erreur DB: {e}", exc_info=True)
+            return {"transcription_count": {}, "transcriptions": [], "db_worker_stats": {}}
+
+def _get_db_data_sync_fast(filters, allowed_projects, db_session):
+    """Version rapide pour récupérer uniquement les données DB (sans stats Celery)"""
+    return _get_db_data_sync_internal(filters, allowed_projects, db_session)
+
+async def get_dashboard_state(filters: dict, allowed_projects: Optional[List[str]] = None) -> dict:
+    """
+    Fonction helper pour récupérer l'état complet du dashboard.
+    Exécute les requêtes bloquantes (DB, Celery) dans des threads.
+    """
+    logger.info(f"-> get_dashboard_state: Démarrage avec filtres: {filters}")
+    
+    page = filters.get("page", 1)
+    limit = filters.get("limit", 25)
+    status = filters.get("status")
+    project = filters.get("project")
+    search = filters.get("search")
+    
+    offset = (page - 1) * limit
+    
+    db = SessionLocal() 
+    logger.info("-> get_dashboard_state: Session DB créée.")
+
+    def get_db_data_sync():
+        """Fonction synchrone à exécuter dans un thread"""
+        try:
+            return _get_db_data_sync_internal(filters, allowed_projects, db)
         finally:
             logger.info("-> get_db_data_sync: Fermeture de la session DB.")
             db.close() 
@@ -315,15 +359,64 @@ async def websocket_endpoint(websocket: WebSocket):
         await manager.connect(websocket)
         logger.info(f"WebSocket: ✅ Client '{user.username}' ajouté au ConnectionManager")
         
-        # ✅ ÉTAPE 6: Envoyer l'état initial
+        # ✅ ÉTAPE 6: Envoyer l'état initial automatiquement
+        # Le client attend maintenant que le WebSocket soit connecté avant de charger les données
+        # On envoie les données DB immédiatement, puis les stats Celery séparément
         try:
             logger.info(f"WebSocket: 📊 Récupération de l'état initial du dashboard...")
             default_filters = {"page": 1, "limit": 25, "status": None, "project": None, "search": None}
-            initial_state = await get_dashboard_state(default_filters, allowed_projects=allowed_projects)
             
-            logger.info(f"WebSocket: 📤 Envoi de l'état initial à '{user.username}'...")
-            await websocket.send_json({"type": "initial_dashboard_state", "data": initial_state})
-            logger.info(f"WebSocket: ✅ État initial envoyé avec succès !")
+            # Récupérer les données DB rapidement (sans attendre Celery)
+            db = SessionLocal()
+            try:
+                db_data = await asyncio.to_thread(_get_db_data_sync_fast, default_filters, allowed_projects, db)
+                
+                # Envoyer les données DB immédiatement
+                initial_state_fast = {
+                    "transcription_count": db_data["transcription_count"],
+                    "transcriptions": db_data["transcriptions"],
+                    "worker_stats": None  # Sera mis à jour plus tard
+                }
+                
+                logger.info(f"WebSocket: 📤 Envoi de l'état initial (DB uniquement) à '{user.username}'...")
+                await websocket.send_json({"type": "initial_dashboard_state", "data": initial_state_fast})
+                logger.info(f"WebSocket: ✅ État initial (DB) envoyé avec succès !")
+                
+            finally:
+                db.close()
+            
+            # Récupérer les stats Celery en arrière-plan et les envoyer séparément
+            async def send_celery_stats():
+                try:
+                    logger.info(f"WebSocket: 📊 Récupération des stats Celery en arrière-plan...")
+                    worker_stats_result = await asyncio.to_thread(get_celery_stats)
+                    
+                    # Fusionner avec les stats DB si nécessaire
+                    db = SessionLocal()
+                    try:
+                        db_stats = await asyncio.to_thread(_get_db_worker_stats, allowed_projects, db)
+                        if worker_stats_result.get('stats') and db_stats:
+                            for worker_name, worker_data in worker_stats_result['stats'].items():
+                                simple_name = worker_name.split('@')[0]
+                                if simple_name in db_stats:
+                                    worker_data['db_stats'] = db_stats[simple_name]
+                                else:
+                                    worker_data['db_stats'] = {
+                                        'total_audio_processed_s': 0,
+                                        'total_processing_time_s': 0
+                                    }
+                    finally:
+                        db.close()
+                    
+                    # Envoyer les stats Celery séparément
+                    logger.info(f"WebSocket: 📤 Envoi des stats Celery à '{user.username}'...")
+                    await websocket.send_json({"type": "worker_stats", "data": worker_stats_result})
+                    logger.info(f"WebSocket: ✅ Stats Celery envoyées avec succès !")
+                except Exception as e:
+                    logger.error(f"WebSocket: ❌ Erreur lors de la récupération des stats Celery: {e}", exc_info=True)
+            
+            # Lancer la récupération des stats Celery en arrière-plan (ne pas attendre)
+            asyncio.create_task(send_celery_stats())
 
         except Exception as e:
             logger.error(f"WebSocket: ❌ Erreur lors de l'envoi de l'état initial: {e}", exc_info=True)

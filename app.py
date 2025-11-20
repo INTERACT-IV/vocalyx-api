@@ -6,6 +6,8 @@ Point d'entrée principal de l'API centrale
 import logging
 import asyncio
 import aioredis
+import json
+import hashlib
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,21 +44,56 @@ Base.metadata.create_all(bind=engine)
 
 # --- TÂCHES DE FOND (WEBSOCKETS) ---
 
-async def redis_pubsub_listener(redis_sub, manager: ConnectionManager):
+async def redis_pubsub_listener(redis_sub, manager: ConnectionManager, app_state):
     """Tâche de fond: Écoute Redis Pub/Sub et diffuse aux WebSockets."""
     try:
         await redis_sub.subscribe("vocalyx_updates")
         logger.info("📡 Abonné au canal Redis 'vocalyx_updates'")
         async for message in redis_sub.listen():
             if message["type"] == "message":
-                logger.info("📬 Message Pub/Sub reçu, diffusion d'un trigger...")
+                message_data = message.get("data", "").decode("utf-8") if isinstance(message.get("data"), bytes) else message.get("data", "")
+                logger.info(f"📬 Message Pub/Sub reçu: {message_data}")
                 
-                # Envoyer un simple trigger. Le client demandera
-                # les données mises à jour avec ses filtres actuels.
-                await manager.broadcast({
-                    "type": "transcription_update_trigger"
-                })
-                logger.info("-> Trigger de mise à jour diffusé à tous les clients.")
+                # Si c'est une mise à jour de transcription spécifique, envoyer directement les données
+                if message_data.startswith("update_"):
+                    transcription_id = message_data.replace("update_", "")
+                    try:
+                        from database import SessionLocal, Transcription
+                        from api.endpoints import _get_allowed_project_names
+                        from database import User
+                        
+                        db = SessionLocal()
+                        try:
+                            transcription = db.query(Transcription).filter(Transcription.id == transcription_id).first()
+                            if transcription:
+                                # Envoyer directement la transcription mise à jour
+                                await manager.broadcast({
+                                    "type": "transcription_updated",
+                                    "data": {
+                                        "transcription": transcription.to_dict()
+                                    }
+                                })
+                                logger.info(f"✅ Transcription {transcription_id} envoyée directement via WebSocket")
+                            else:
+                                # Transcription non trouvée, envoyer un trigger général
+                                await manager.broadcast({
+                                    "type": "transcription_update_trigger"
+                                })
+                        finally:
+                            db.close()
+                    except Exception as e:
+                        logger.error(f"❌ Erreur lors de la récupération de la transcription: {e}", exc_info=True)
+                        # En cas d'erreur, envoyer un trigger général
+                        await manager.broadcast({
+                            "type": "transcription_update_trigger"
+                        })
+                else:
+                    # Pour les autres événements (new_transcription, delete_transcription), envoyer un trigger
+                    # Le client demandera les données mises à jour avec ses filtres actuels
+                    await manager.broadcast({
+                        "type": "transcription_update_trigger"
+                    })
+                    logger.info("-> Trigger de mise à jour diffusé à tous les clients.")
 
                             
     except asyncio.CancelledError:
@@ -67,7 +104,10 @@ async def redis_pubsub_listener(redis_sub, manager: ConnectionManager):
         logger.info("Redis Pub/Sub listener arrêté.")
 
 async def periodic_worker_stats(app_state, manager: ConnectionManager):
-    """Tâche de fond: Polling des stats workers et diffusion aux WebSockets."""
+    """Tâche de fond: Polling des stats workers et diffusion aux WebSockets.
+    Ne diffuse que si les stats ont changé pour éviter les mises à jour inutiles.
+    """
+    last_stats_hash = None
     while True:
         try:
             logger.debug("📊 Polling des stats workers...")
@@ -75,10 +115,21 @@ async def periodic_worker_stats(app_state, manager: ConnectionManager):
             # get_celery_stats() est synchrone, l'exécuter dans un thread
             stats = await asyncio.to_thread(get_celery_stats)
             
-            await manager.broadcast({
-                "type": "worker_stats",
-                "data": stats
-            })
+            # Calculer un hash simple des stats pour détecter les changements
+            import hashlib
+            stats_str = json.dumps(stats, sort_keys=True, default=str)
+            stats_hash = hashlib.md5(stats_str.encode()).hexdigest()
+            
+            # Diffuser seulement si les stats ont changé
+            if stats_hash != last_stats_hash:
+                await manager.broadcast({
+                    "type": "worker_stats",
+                    "data": stats
+                })
+                last_stats_hash = stats_hash
+                logger.debug("✅ Stats workers diffusées (changement détecté)")
+            else:
+                logger.debug("⏭️ Stats workers inchangées, pas de diffusion")
             
             await asyncio.sleep(5) # Polling toutes les 5 secondes (côté serveur)
             
@@ -109,7 +160,7 @@ async def lifespan(app: FastAPI):
         
         # Démarrer les tâches de fond
         app.state.pubsub_task = asyncio.create_task(
-            redis_pubsub_listener(redis_sub, manager)
+            redis_pubsub_listener(redis_sub, manager, app.state)
         )
         app.state.worker_stats_task = asyncio.create_task(
             periodic_worker_stats(app.state, manager)
