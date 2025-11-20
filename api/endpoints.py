@@ -665,6 +665,7 @@ async def create_transcription(
     project_name: str = Form(...),
     use_vad: bool = Form(True),
     diarization: bool = Form(False),
+    whisper_model: str = Form("small"),
     project: Project = Depends(verify_project_key),
     db: Session = Depends(get_db)
 ):
@@ -693,7 +694,15 @@ async def create_transcription(
             detail=f"File type '{extension}' not allowed. Allowed: {config.allowed_extensions}"
         )
     
-    # 2. Sauvegarder le fichier
+    # 2. Validation du modèle Whisper
+    valid_models = ["tiny", "base", "small", "medium"]
+    if whisper_model not in valid_models:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid whisper_model '{whisper_model}'. Valid models: {', '.join(valid_models)}"
+        )
+    
+    # 3. Sauvegarder le fichier
     transcription_id = str(uuid.uuid4())
     safe_filename = f"{transcription_id}_{filename}"
     file_path = config.upload_dir / safe_filename
@@ -708,12 +717,13 @@ async def create_transcription(
             detail="Failed to save uploaded file"
         )
     
-    # 3. Créer l'entrée en base de données
+    # 4. Créer l'entrée en base de données
     transcription = Transcription(
         id=transcription_id,
         status="pending",
         project_name=project.name,
         file_path=str(file_path),
+        whisper_model=whisper_model,
         vad_enabled=1 if use_vad else 0,
         diarization_enabled=1 if diarization else 0,
         created_at=datetime.utcnow()

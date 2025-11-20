@@ -43,6 +43,10 @@ class TranscriptionCreate(BaseModel):
     """Schéma pour créer une transcription"""
     project_name: str
     use_vad: bool = True
+    whisper_model: Optional[str] = Field(
+        default="small",
+        description="Modèle Whisper à utiliser: tiny, base, small, medium"
+    )
 
 class TranscriptionUpdate(BaseModel):
     """Schéma pour mettre à jour une transcription (par les workers)"""
@@ -73,6 +77,7 @@ class TranscriptionResponse(BaseModel):
     segments_count: Optional[int] = None
     vad_enabled: Optional[bool] = None
     diarization_enabled: Optional[bool] = None
+    whisper_model: Optional[str] = None
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
 
