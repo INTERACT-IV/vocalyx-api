@@ -470,34 +470,50 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @auth_router.post("/auth/token", response_model=schemas.Token, tags=["Authentication"])
 async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(), 
+    form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
     """
     Fournit un token JWT en échange de username/password
+    Utilise les services de la clean architecture
     """
-    user = auth.authenticate_user(db, form_data.username, form_data.password)
-    if not user:
+    from infrastructure.database.repositories import SQLAlchemyUserRepository
+    from infrastructure.security.password_hasher import PasswordHasher
+    from infrastructure.security.jwt_service import JWTService
+    from application.services.user_service import UserService
+    
+    # Créer les services
+    user_repository = SQLAlchemyUserRepository(db)
+    password_hasher = PasswordHasher()
+    user_service = UserService(user_repository, password_hasher)
+    jwt_service = JWTService(
+        secret_key=auth.JWT_SECRET_KEY,
+        algorithm=auth.JWT_ALGORITHM,
+        expire_minutes=auth.JWT_EXPIRE_MINUTES
+    )
+    
+    # Authentifier l'utilisateur via le service
+    user_entity = user_service.authenticate(form_data.username, form_data.password)
+    if not user_entity:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Créer le token
     access_token_expires = timedelta(minutes=auth.JWT_EXPIRE_MINUTES)
     token_data = {
-        "sub": user.username,
-        "is_admin": user.is_admin 
+        "sub": user_entity.username,
+        "is_admin": user_entity.is_admin
     }
-    access_token = auth.create_access_token(
-        data=token_data, expires_delta=access_token_expires
+    access_token = jwt_service.create_access_token(
+        data=token_data,
+        expires_delta=access_token_expires
     )
-
+    
     # Mettre à jour la dernière connexion
-    user.last_login_at = datetime.utcnow()
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    user_service.update_last_login(user_entity)
     
     return {"access_token": access_token, "token_type": "bearer"}
 

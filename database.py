@@ -206,39 +206,47 @@ def get_or_create_project(db: Session, project_name: str) -> Project:
         raise
 
 def init_db():
-    """Initialise la base de données (crée les tables et le projet admin)"""
-    Base.metadata.create_all(bind=engine)
-    logger.warning("✅ Tables de base de données créées") # <-- Changé
-    
-    # Créer le projet admin si nécessaire
-    db = SessionLocal()
+    """Initialise la base de données (crée les tables et le projet admin)
+    Utilise les nouveaux services de la clean architecture
+    """
+    # Utiliser les nouveaux modules
     try:
-        # 1. Gérer le projet Admin
-        admin_project = get_or_create_project(db, config.admin_project_name)
-        logger.warning(f"✅ Projet admin '{admin_project.name}' prêt")
-        logger.warning("==================================================================")
-        logger.warning(f"🔑 Clé API Admin ({admin_project.name}): {admin_project.api_key}")
-        logger.warning("Copiez cette clé pour l'utiliser dans le dashboard (SI PAS DE LOGIN)")
-        logger.warning("==================================================================")
-
-        # 2. Gérer l'utilisateur Admin
-        admin_user = db.query(User).filter(User.username == "admin").first()
-        if not admin_user:
-            logger.warning("Utilisateur 'admin' non trouvé. Création...")
-            admin_password_hash = get_password_hash("admin")
-            new_admin_user = User(
-                username="admin",
-                hashed_password=admin_password_hash,
-                is_admin=True
-            )
-            db.add(new_admin_user)
-            db.commit()
-            logger.warning("✅ Utilisateur 'admin' créé avec le mot de passe 'admin'")
-        else:
-            logger.warning("✅ Utilisateur 'admin' déjà existant.")
+        from infrastructure.database.init_db import init_db as init_db_new
+        init_db_new()
+    except ImportError:
+        # Fallback sur l'ancienne méthode si les nouveaux modules ne sont pas disponibles
+        Base.metadata.create_all(bind=engine)
+        logger.warning("✅ Tables de base de données créées")
         
-    finally:
-        db.close()
+        # Créer le projet admin si nécessaire
+        db = SessionLocal()
+        try:
+            # 1. Gérer le projet Admin
+            admin_project = get_or_create_project(db, config.admin_project_name)
+            logger.warning(f"✅ Projet admin '{admin_project.name}' prêt")
+            logger.warning("==================================================================")
+            logger.warning(f"🔑 Clé API Admin ({admin_project.name}): {admin_project.api_key}")
+            logger.warning("Copiez cette clé pour l'utiliser dans le dashboard (SI PAS DE LOGIN)")
+            logger.warning("==================================================================")
+
+            # 2. Gérer l'utilisateur Admin
+            admin_user = db.query(User).filter(User.username == "admin").first()
+            if not admin_user:
+                logger.warning("Utilisateur 'admin' non trouvé. Création...")
+                admin_password_hash = get_password_hash("admin")
+                new_admin_user = User(
+                    username="admin",
+                    hashed_password=admin_password_hash,
+                    is_admin=True
+                )
+                db.add(new_admin_user)
+                db.commit()
+                logger.warning("✅ Utilisateur 'admin' créé avec le mot de passe 'admin'")
+            else:
+                logger.warning("✅ Utilisateur 'admin' déjà existant.")
+            
+        finally:
+            db.close()
 
 def get_db():
     """Dépendance pour obtenir une session de base de données"""

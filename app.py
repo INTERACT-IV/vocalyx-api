@@ -40,7 +40,12 @@ else:
     )
 
 # Créer toutes les tables
-Base.metadata.create_all(bind=engine)
+# Utiliser les nouveaux modules si disponibles, sinon fallback sur les anciens
+try:
+    from infrastructure.database.models import Base as BaseNew
+    BaseNew.metadata.create_all(bind=engine)
+except ImportError:
+    Base.metadata.create_all(bind=engine)
 
 # --- TÂCHES DE FOND (WEBSOCKETS) ---
 

@@ -1,160 +1,132 @@
-# vocalyx-api
+# Vocalyx API
 
-API centrale pour le système de transcription audio Vocalyx.
+API centrale REST et WebSocket pour la gestion des transcriptions audio.
 
-## 🎯 Rôle
+## Description
 
-- **Propriétaire unique** de la base de données PostgreSQL
-- Gestion de la file d'attente Redis + Celery
-- API REST pour tous les autres services (Dashboard, Workers)
+Module API central de Vocalyx exposant une interface REST pour la gestion des transcriptions, projets et utilisateurs. Fournit également une connexion WebSocket pour les mises à jour en temps réel du dashboard.
 
-## 🏗️ Architecture
+## Architecture
+
+### Structure
 
 ```
 vocalyx-api/
-├── app.py                  # Point d'entrée FastAPI
-├── config.py               # Configuration
-├── database.py             # Modèles SQLAlchemy
-├── celery_app.py           # Configuration Celery
-├── logging_config.py       # Configuration du logging
-├── api/
-│   ├── __init__.py
-│   ├── endpoints.py        # Routes API
-│   ├── dependencies.py     # Auth & DB
-│   └── schemas.py          # Schémas Pydantic
-├── requirements.txt
-├── Dockerfile
-└── config.ini
+├── api/                    # Couche API (endpoints, auth, websocket)
+├── application/            # Services applicatifs
+├── domain/                 # Entités métier et repositories
+├── infrastructure/         # Implémentations techniques
+│   ├── database/          # Modèles SQLAlchemy et repositories
+│   ├── external/          # Clients externes (Redis)
+│   └── security/          # JWT et hashage de mots de passe
+├── app.py                 # Point d'entrée FastAPI
+├── database.py            # Configuration base de données
+└── celery_app.py          # Configuration Celery
 ```
 
-## 🚀 Installation
+### Fonctionnalités
 
-### Prérequis
+- **Endpoints REST** : CRUD pour transcriptions, projets, utilisateurs
+- **Authentification** : JWT avec OAuth2
+- **WebSocket** : Mises à jour temps réel via Redis Pub/Sub
+- **Gestion des tâches** : Distribution via Celery
+- **Administration** : Gestion des utilisateurs et projets
 
-- Python 3.10+
-- PostgreSQL 15+
-- Redis 7+
+## Dépendances principales
 
-### Installation locale
+### FastAPI
+Framework web asynchrone Python pour la création d'APIs REST. Utilisé pour les endpoints HTTP et la documentation automatique (Swagger/OpenAPI).
 
-```bash
-# Cloner le dépôt
-git clone <repository>
-cd vocalyx-api
+### Uvicorn
+Serveur ASGI haute performance pour exécuter FastAPI. Supporte le protocole WebSocket et le traitement asynchrone.
 
-# Créer un environnement virtuel
-python3.10 -m venv venv
-source venv/bin/activate  # Linux/Mac
-# ou
-venv\Scripts\activate  # Windows
+### SQLAlchemy
+ORM Python pour l'interaction avec PostgreSQL. Gère les modèles de données, les sessions et les requêtes.
 
-# Installer les dépendances
-pip install -r requirements.txt
+### Celery
+Système de files d'attente distribuées pour l'exécution asynchrone de tâches. Utilisé pour distribuer les transcriptions aux workers.
 
-# Configurer
-cp config.ini config.local.ini
-# Éditer config.local.ini avec vos paramètres
+### Redis / aioredis
+Broker de messages pour Celery et système Pub/Sub pour les notifications WebSocket. `aioredis` fournit le client asynchrone.
 
-# Initialiser la base de données
-python -c "from database import init_db; init_db()"
+### Pydantic
+Validation et sérialisation de données. Utilisé pour les schémas de requêtes/réponses et la validation des modèles.
 
-# Lancer l'API
-python app.py
-```
+### python-jose
+Bibliothèque JWT pour l'authentification. Génère et valide les tokens d'accès.
 
-L'API sera accessible sur http://localhost:8000
+### passlib / bcrypt
+Hashage sécurisé des mots de passe. `bcrypt` est l'algorithme utilisé par `passlib`.
 
-Documentation: http://localhost:8000/docs
+### psycopg2-binary
+Adaptateur PostgreSQL pour Python. Utilisé par SQLAlchemy pour la connexion à la base de données.
 
-## 🐳 Docker
+## Configuration
 
-```bash
-# Build
-docker build -t vocalyx-api .
+Variables d'environnement principales :
 
-# Run
-docker run -p 8000:8000 \
-  -e DATABASE_URL="postgresql://user:pass@host/db" \
-  -e REDIS_URL="redis://redis:6379/0" \
-  -v $(pwd)/shared_uploads:/app/shared_uploads \
-  vocalyx-api
-```
+- `DATABASE_URL` : URL de connexion PostgreSQL
+- `REDIS_URL` : URL de connexion Redis
+- `CELERY_BROKER_URL` : URL du broker Celery
+- `CELERY_RESULT_BACKEND` : Backend de résultats Celery
+- `INTERNAL_API_KEY` : Clé pour la communication interne
+- `ADMIN_PROJECT_NAME` : Nom du projet administrateur
+- `CORS_ORIGINS` : Origines autorisées pour CORS
+- `LOG_LEVEL` : Niveau de logging (DEBUG, INFO, WARNING, ERROR)
 
-## 📡 Endpoints Principaux
+## Endpoints principaux
 
-### Projets
-
-- `POST /api/projects` - Créer un projet (admin)
-- `GET /api/projects` - Lister les projets (admin)
-- `GET /api/projects/{name}` - Détails d'un projet (admin)
+### Authentification
+- `POST /api/auth/token` : Obtenir un token JWT
+- `GET /api/user/me` : Profil utilisateur actuel
 
 ### Transcriptions
+- `POST /api/transcriptions` : Créer une transcription
+- `GET /api/transcriptions` : Lister les transcriptions
+- `GET /api/transcriptions/{id}` : Détails d'une transcription
+- `PUT /api/transcriptions/{id}` : Mettre à jour une transcription
+- `DELETE /api/transcriptions/{id}` : Supprimer une transcription
 
-- `POST /api/transcriptions` - Créer une transcription (clé projet)
-- `GET /api/transcriptions` - Lister les transcriptions (interne)
-- `GET /api/transcriptions/{id}` - Détails d'une transcription (interne)
-- `PATCH /api/transcriptions/{id}` - Mettre à jour (interne)
-- `DELETE /api/transcriptions/{id}` - Supprimer (interne)
-- `GET /api/transcriptions/count` - Statistiques (interne)
+### Projets
+- `GET /api/projects` : Lister les projets
+- `POST /api/projects` : Créer un projet
+- `GET /api/projects/{name}` : Détails d'un projet
 
-### Workers & Tâches
+### Administration
+- `GET /api/admin/users` : Lister les utilisateurs
+- `POST /api/admin/users` : Créer un utilisateur
+- `POST /api/admin/users/{id}/assign-project` : Assigner un projet
+- `DELETE /api/admin/users/{id}` : Supprimer un utilisateur
 
-- `GET /api/workers` - Liste des workers Celery (interne)
-- `GET /api/tasks/{id}` - Statut d'une tâche (interne)
-- `POST /api/tasks/{id}/cancel` - Annuler une tâche (interne)
+### WebSocket
+- `WS /api/ws/updates` : Connexion WebSocket pour les mises à jour temps réel
 
-## 🔒 Sécurité
+## WebSocket
 
-### 3 Niveaux d'Authentification
+Le module expose un endpoint WebSocket pour les mises à jour en temps réel :
 
-1. **Clé Projet** (`X-API-Key`) - Pour les uploads depuis le Dashboard
-2. **Clé Interne** (`X-Internal-Key`) - Pour les communications inter-services
-3. **Clé Admin** (`X-API-Key` du projet admin) - Pour la gestion des projets
+- Authentification via token JWT dans l'URL
+- Diffusion des mises à jour de transcriptions via Redis Pub/Sub
+- Envoi périodique des statistiques des workers
+- Gestion des connexions multiples via `ConnectionManager`
 
-### Configuration des Clés
+## Base de données
 
-```ini
-[SECURITY]
-internal_api_key = SECRET_KEY_HERE
-admin_project_name = ISICOMTECH
+Modèles principaux :
+
+- **User** : Utilisateurs du système
+- **Project** : Projets de transcription
+- **Transcription** : Métadonnées des transcriptions
+
+Les tables sont créées automatiquement au démarrage via SQLAlchemy.
+
+## Logs
+
+Les logs sont écrits dans `./shared/logs/vocalyx-api.log` avec le format :
+
+```
+%(asctime)s [%(levelname)s] %(name)s: %(message)s
 ```
 
-## ⚙️ Configuration
+Voir `DOCUMENTATION_LOGS.md` pour la documentation complète des logs.
 
-Voir `config.ini` pour toutes les options disponibles.
-
-### Variables d'Environnement (optionnel)
-
-```bash
-DATABASE_URL=postgresql://user:pass@host/db
-REDIS_URL=redis://redis:6379/0
-CELERY_BROKER_URL=redis://redis:6379/0
-```
-
-## 📊 Monitoring
-
-- **Logs**: `logs/vocalyx-api.log`
-- **Health Check**: `GET /health`
-- **Celery Flower**: Utiliser `docker-compose` avec le service `flower`
-
-## 🧪 Tests
-
-```bash
-# Tests unitaires (à implémenter)
-pytest tests/
-
-# Test de santé
-curl http://localhost:8000/health
-```
-
-## 📝 Changelog
-
-### Version 0.0.0
-- Architecture microservices découplée
-- Support Redis/Celery
-- API REST complète
-- Multi-projets avec clés API
-
-## 📄 Licence
-
-Propriétaire - Guilhem RICHARD
