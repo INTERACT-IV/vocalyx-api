@@ -45,12 +45,12 @@ celery_app.conf.update(
     task_send_sent_event=True,
 )
 
-# Définition de la tâche (elle sera exécutée par vocalyx-transcribe)
+# Définition des tâches (elles seront exécutées par les workers respectifs)
 @celery_app.task(
     bind=True,
     name='transcribe_audio',
     max_retries=3,
-    default_retry_delay=60  # Retry après 1 minute
+    default_retry_delay=60,  # Retry après 1 minute
 )
 def transcribe_audio_task(self, transcription_id: str):
     """
@@ -123,19 +123,49 @@ def get_celery_stats():
                         # Fusionner les données de santé
                         stats[worker_name]['health'] = health_data
         
+        # Compter les workers par type
+        transcription_workers = {}
+        enrichment_workers = {}
+        
+        if active_workers:
+            for worker_name, tasks in active_workers.items():
+                # Identifier le type de worker par son nom
+                # Les workers de transcription ont des noms comme "worker-01@..." ou commencent par "worker-"
+                # Les workers d'enrichissement ont des noms comme "enrichment-worker-01@..." ou commencent par "enrichment-"
+                if worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower():
+                    enrichment_workers[worker_name] = tasks
+                else:
+                    transcription_workers[worker_name] = tasks
+        
+        if stats:
+            for worker_name in list(stats.keys()):
+                if worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower():
+                    if worker_name not in enrichment_workers:
+                        enrichment_workers[worker_name] = []
+                else:
+                    if worker_name not in transcription_workers:
+                        transcription_workers[worker_name] = []
+        
         # Compter les workers
         worker_count = len(active_workers) # Plus besoin de 'if active_workers else 0'
+        transcription_worker_count = len(transcription_workers)
+        enrichment_worker_count = len(enrichment_workers)
         
-        # Compter les tâches actives
-        active_task_count = 0
-        if active_workers:
-            for worker, tasks in active_workers.items():
-                active_task_count += len(tasks)
+        # Compter les tâches actives par type
+        transcription_active_tasks = sum(len(tasks) for tasks in transcription_workers.values())
+        enrichment_active_tasks = sum(len(tasks) for tasks in enrichment_workers.values())
+        active_task_count = transcription_active_tasks + enrichment_active_tasks
         
         return {
             "worker_count": worker_count,
+            "transcription_worker_count": transcription_worker_count,
+            "enrichment_worker_count": enrichment_worker_count,
             "active_tasks": active_task_count,
+            "transcription_active_tasks": transcription_active_tasks,
+            "enrichment_active_tasks": enrichment_active_tasks,
             "workers": active_workers, # 'active_workers' est garanti d'être un dict
+            "transcription_workers": transcription_workers,
+            "enrichment_workers": enrichment_workers,
             "registered_tasks": registered_tasks,
             "stats": stats
         }
@@ -145,8 +175,14 @@ def get_celery_stats():
         # Retourner un état d'erreur clair
         return {
             "worker_count": 0,
+            "transcription_worker_count": 0,
+            "enrichment_worker_count": 0,
             "active_tasks": 0,
+            "transcription_active_tasks": 0,
+            "enrichment_active_tasks": 0,
             "workers": {},
+            "transcription_workers": {},
+            "enrichment_workers": {},
             "registered_tasks": {},
             "stats": {},
             "error": f"Failed to inspect Celery: {str(e)}"

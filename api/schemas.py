@@ -3,7 +3,7 @@ vocalyx-api/api/schemas.py
 Schémas Pydantic pour la validation et la sérialisation
 """
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from pydantic import BaseModel, Field, field_serializer
 from datetime import datetime
 
@@ -59,6 +59,11 @@ class TranscriptionUpdate(BaseModel):
     segments: Optional[str] = None  # JSON stringifié
     error_message: Optional[str] = None
     segments_count: Optional[int] = None
+    enrichment_status: Optional[str] = None
+    enrichment_worker_id: Optional[str] = None
+    enrichment_data: Optional[str] = None  # JSON stringifié
+    enrichment_error: Optional[str] = None
+    enrichment_processing_time: Optional[float] = None
 
 class TranscriptionResponse(BaseModel):
     """Schéma pour retourner une transcription"""
@@ -77,7 +82,15 @@ class TranscriptionResponse(BaseModel):
     segments_count: Optional[int] = None
     vad_enabled: Optional[bool] = None
     diarization_enabled: Optional[bool] = None
+    enrichment_requested: Optional[bool] = None
     whisper_model: Optional[str] = None
+    enrichment_status: Optional[str] = None
+    enrichment_worker_id: Optional[str] = None
+    enrichment_data: Optional[Dict[str, Any]] = None
+    enrichment_error: Optional[str] = None
+    enrichment_processing_time: Optional[float] = None
+    llm_model: Optional[str] = None
+    enrichment_prompts: Optional[Dict[str, str]] = None
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
 

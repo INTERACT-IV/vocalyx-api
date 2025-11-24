@@ -82,6 +82,22 @@ class TranscriptionMapper:
             except (json.JSONDecodeError, TypeError):
                 segments_list = None
         
+        # Désérialiser les données d'enrichissement JSON
+        enrichment_data_dict = None
+        if model.enrichment_data:
+            try:
+                enrichment_data_dict = json.loads(model.enrichment_data)
+            except (json.JSONDecodeError, TypeError):
+                enrichment_data_dict = None
+        
+        # Désérialiser les prompts d'enrichissement JSON
+        enrichment_prompts_dict = None
+        if model.enrichment_prompts:
+            try:
+                enrichment_prompts_dict = json.loads(model.enrichment_prompts)
+            except (json.JSONDecodeError, TypeError):
+                enrichment_prompts_dict = None
+        
         return Transcription(
             id=model.id,
             project_name=model.project_name,
@@ -100,6 +116,13 @@ class TranscriptionMapper:
             diarization_enabled=bool(model.diarization_enabled),
             enrichment_requested=bool(model.enrichment_requested),
             whisper_model=model.whisper_model or "small",
+            enrichment_status=model.enrichment_status,
+            enrichment_worker_id=model.enrichment_worker_id,
+            enrichment_data=enrichment_data_dict,
+            enrichment_error=model.enrichment_error,
+            enrichment_processing_time=float(model.enrichment_processing_time) if model.enrichment_processing_time else None,
+            llm_model=model.llm_model,
+            enrichment_prompts=enrichment_prompts_dict,
             created_at=model.created_at,
             finished_at=model.finished_at
         )
@@ -127,6 +150,13 @@ class TranscriptionMapper:
         model.diarization_enabled = 1 if transcription.diarization_enabled else 0
         model.enrichment_requested = 1 if transcription.enrichment_requested else 0
         model.whisper_model = transcription.whisper_model
+        model.enrichment_status = transcription.enrichment_status
+        model.enrichment_worker_id = transcription.enrichment_worker_id
+        model.enrichment_data = json.dumps(transcription.enrichment_data, ensure_ascii=False) if transcription.enrichment_data else None
+        model.enrichment_error = transcription.enrichment_error
+        model.enrichment_processing_time = transcription.enrichment_processing_time
+        model.llm_model = transcription.llm_model
+        model.enrichment_prompts = json.dumps(transcription.enrichment_prompts, ensure_ascii=False) if transcription.enrichment_prompts else None
         model.created_at = transcription.created_at
         model.finished_at = transcription.finished_at
         

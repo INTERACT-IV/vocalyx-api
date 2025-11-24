@@ -76,7 +76,7 @@ class TranscriptionModel(Base):
     
     id = Column(String, primary_key=True, index=True)
     status = Column(
-        Enum("pending", "processing", "done", "error", name="transcription_status"),
+        Enum("pending", "processing", "transcribed", "done", "error", name="transcription_status"),
         default="pending",
         index=True
     )
@@ -101,8 +101,22 @@ class TranscriptionModel(Base):
     # Options
     vad_enabled = Column(Integer, default=0)
     diarization_enabled = Column(Integer, default=0)
-    enrichment_requested = Column(Integer, default=1)
+    enrichment_requested = Column(Integer, default=0)
     whisper_model = Column(String, nullable=True, default="small")
+    
+    # Enrichissement
+    enrichment_status = Column(
+        Enum("pending", "processing", "done", "error", name="enrichment_status"),
+        default="pending",
+        nullable=True,
+        index=True
+    )
+    enrichment_worker_id = Column(String, nullable=True, index=True)
+    enrichment_data = Column(Text, nullable=True)  # JSON stringifié
+    enrichment_error = Column(Text, nullable=True)
+    enrichment_processing_time = Column(Float, nullable=True)  # Temps de traitement de l'enrichissement
+    llm_model = Column(String, nullable=True)  # Modèle LLM utilisé
+    enrichment_prompts = Column(Text, nullable=True)  # JSON avec les prompts personnalisés
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

@@ -112,7 +112,7 @@ class Transcription(Base):
     
     id = Column(String, primary_key=True, index=True)
     status = Column(
-        Enum("pending", "processing", "done", "error", name="transcription_status"),
+        Enum("pending", "processing", "transcribed", "done", "error", name="transcription_status"),
         default="pending",
         index=True
     )
@@ -137,8 +137,22 @@ class Transcription(Base):
     # Options
     vad_enabled = Column(Integer, default=0)
     diarization_enabled = Column(Integer, default=0)
-    enrichment_requested = Column(Integer, default=1)
+    enrichment_requested = Column(Integer, default=0)
     whisper_model = Column(String, nullable=True, default="small")  # Modèle Whisper utilisé
+    
+    # Enrichissement
+    enrichment_status = Column(
+        Enum("pending", "processing", "done", "error", name="enrichment_status"),
+        default="pending",
+        nullable=True,
+        index=True
+    )
+    enrichment_worker_id = Column(String, nullable=True, index=True)
+    enrichment_data = Column(Text, nullable=True)  # JSON stringifié
+    enrichment_error = Column(Text, nullable=True)
+    enrichment_processing_time = Column(Float, nullable=True)  # Temps de traitement de l'enrichissement
+    llm_model = Column(String, nullable=True)  # Modèle LLM utilisé
+    enrichment_prompts = Column(Text, nullable=True)  # JSON avec les prompts personnalisés
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
@@ -152,6 +166,20 @@ class Transcription(Base):
         if self.segments:
             try:
                 segments_list = json.loads(self.segments)
+            except:
+                pass
+        
+        enrichment_data_dict = None
+        if self.enrichment_data:
+            try:
+                enrichment_data_dict = json.loads(self.enrichment_data)
+            except:
+                pass
+        
+        enrichment_prompts_dict = None
+        if self.enrichment_prompts:
+            try:
+                enrichment_prompts_dict = json.loads(self.enrichment_prompts)
             except:
                 pass
         
@@ -173,7 +201,14 @@ class Transcription(Base):
             "segments_count": self.segments_count,
             "vad_enabled": bool(self.vad_enabled),
             "diarization_enabled": bool(self.diarization_enabled),
+            "enrichment_requested": bool(self.enrichment_requested),
             "whisper_model": self.whisper_model,
+            "enrichment_status": self.enrichment_status,
+            "enrichment_worker_id": self.enrichment_worker_id,
+            "enrichment_data": enrichment_data_dict,
+            "enrichment_error": self.enrichment_error,
+            "llm_model": self.llm_model,
+            "enrichment_prompts": enrichment_prompts_dict,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }

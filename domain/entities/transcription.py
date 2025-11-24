@@ -12,6 +12,7 @@ class TranscriptionStatus(str, Enum):
     """Statut d'une transcription"""
     PENDING = "pending"
     PROCESSING = "processing"
+    TRANSCRIBED = "transcribed"  # Transcription terminée, en attente d'enrichissement
     DONE = "done"
     ERROR = "error"
 
@@ -34,8 +35,14 @@ class Transcription:
     segments_count: Optional[int] = None
     vad_enabled: bool = False
     diarization_enabled: bool = False
-    enrichment_requested: bool = True
+    enrichment_requested: bool = False
     whisper_model: str = "small"
+    enrichment_status: Optional[str] = None
+    enrichment_worker_id: Optional[str] = None
+    enrichment_data: Optional[Dict[str, Any]] = None
+    enrichment_error: Optional[str] = None
+    llm_model: Optional[str] = None
+    enrichment_prompts: Optional[Dict[str, str]] = None
     created_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     

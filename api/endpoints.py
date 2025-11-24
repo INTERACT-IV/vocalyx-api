@@ -775,6 +775,9 @@ async def create_transcription(
     use_vad: bool = Form(True),
     diarization: bool = Form(False),
     whisper_model: str = Form("small"),
+    enrichment: bool = Form(False),
+    llm_model: Optional[str] = Form(None),
+    enrichment_prompts: Optional[str] = Form(None),  # JSON stringifié
     project: Project = Depends(verify_project_key),
     db: Session = Depends(get_db)
 ):
@@ -826,7 +829,19 @@ async def create_transcription(
             detail="Failed to save uploaded file"
         )
     
-    # 4. Créer l'entrée en base de données
+    # 4. Parser les prompts d'enrichissement si fournis
+    enrichment_prompts_dict = None
+    if enrichment_prompts:
+        try:
+            import json
+            enrichment_prompts_dict = json.loads(enrichment_prompts)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON format for enrichment_prompts"
+            )
+    
+    # 5. Créer l'entrée en base de données
     transcription = Transcription(
         id=transcription_id,
         status="pending",
@@ -835,6 +850,10 @@ async def create_transcription(
         whisper_model=whisper_model,
         vad_enabled=1 if use_vad else 0,
         diarization_enabled=1 if diarization else 0,
+        enrichment_requested=1 if enrichment else 0,
+        llm_model=llm_model,
+        enrichment_status="pending" if enrichment else None,
+        enrichment_prompts=json.dumps(enrichment_prompts_dict, ensure_ascii=False) if enrichment_prompts_dict else None,
         created_at=datetime.utcnow()
     )
     db.add(transcription)
@@ -853,7 +872,11 @@ async def create_transcription(
     
     # 4. Envoyer la tâche à Celery
     try:
-        task = transcribe_audio_task.delay(transcription_id)
+        # Envoyer la tâche dans la queue 'transcription'
+        task = transcribe_audio_task.apply_async(
+            args=[transcription_id],
+            queue='transcription'
+        )
         
         transcription.celery_task_id = task.id
         db.commit()
@@ -1137,6 +1160,16 @@ async def update_transcription(
         )
     
     update_data = update.dict(exclude_unset=True)
+    
+    # Gérer les champs JSON (enrichment_data)
+    if 'enrichment_data' in update_data and update_data['enrichment_data'] is not None:
+        if isinstance(update_data['enrichment_data'], str):
+            # Si c'est déjà une string JSON, la garder telle quelle
+            pass
+        else:
+            # Si c'est un dict, le convertir en JSON string
+            import json
+            update_data['enrichment_data'] = json.dumps(update_data['enrichment_data'], ensure_ascii=False)
     
     for key, value in update_data.items():
         if hasattr(transcription, key):
