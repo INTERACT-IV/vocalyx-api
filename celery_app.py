@@ -4,11 +4,23 @@ Configuration de Celery pour l'orchestration des tâches
 """
 
 import logging
+import json
+import redis
 from celery import Celery
 from config import Config
 
 config = Config()
 logger = logging.getLogger(__name__)
+
+# Client Redis pour stocker les résultats intermédiaires des segments
+_redis_client = None
+
+def get_redis_client():
+    """Obtient un client Redis pour stocker les résultats des segments"""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(config.redis_url, decode_responses=True)
+    return _redis_client
 
 # Créer l'instance Celery
 celery_app = Celery(
@@ -46,49 +58,146 @@ celery_app.conf.update(
 )
 
 # Définition des tâches (elles seront exécutées par les workers respectifs)
+# NOTE: Cette tâche est définie ici pour l'API, mais la vraie implémentation est dans vocalyx-transcribe
+# On utilise juste le nom pour pouvoir l'enqueuer depuis l'API
 @celery_app.task(
     bind=True,
     name='transcribe_audio',
     max_retries=3,
     default_retry_delay=60,  # Retry après 1 minute
 )
-def transcribe_audio_task(self, transcription_id: str):
+def transcribe_audio_task(self, transcription_id: str, use_distributed: bool = None):
     """
-    Tâche de transcription.
+    Tâche de transcription (orchestrateur).
     
     IMPORTANT: Cette tâche est définie ici mais EXÉCUTÉE par vocalyx-transcribe.
     L'API ne fait qu'enqueuer la tâche.
     
+    Si use_distributed=True ou si l'audio dépasse le seuil configuré (par défaut 30s),
+    cette tâche va :
+    1. Découper l'audio en segments
+    2. Créer une tâche par segment (distribuée sur plusieurs workers)
+    3. Lancer une tâche d'agrégation qui attend tous les segments
+    
+    Sinon, elle se comporte comme avant (rétrocompatibilité).
+    
+    Le seuil minimal est configurable via :
+    - config.ini : section [TRANSCRIPTION], clé distributed_min_duration_seconds
+    - Variable d'environnement : DISTRIBUTED_MIN_DURATION_SECONDS
+    
     Args:
         transcription_id: ID de la transcription à traiter
+        use_distributed: Si True, force le mode distribué. Si None, décide automatiquement selon la durée
         
     Returns:
         dict: Résultat de la transcription
     """
     from database import SessionLocal, Transcription
     from datetime import datetime
+    from pathlib import Path
     
     # Mettre à jour le celery_task_id dans la DB
     db = SessionLocal()
     try:
         trans = db.query(Transcription).filter(Transcription.id == transcription_id).first()
-        if trans:
-            trans.celery_task_id = self.request.id
-            trans.status = 'pending'  # S'assurer que le statut est correct
-            db.commit()
-            logger.info(f"[{transcription_id}] Task {self.request.id} enqueued")
+        if not trans:
+            logger.error(f"[{transcription_id}] Transcription not found")
+            return {"status": "error", "error": "Transcription not found"}
+        
+        trans.celery_task_id = self.request.id
+        trans.status = 'pending'
+        db.commit()
+        
+        # Vérifier si on doit utiliser le mode distribué
+        file_path = Path(trans.file_path) if trans.file_path else None
+        
+        if use_distributed is None:
+            # Décider automatiquement selon la durée configurée
+            min_duration = config.distributed_min_duration_seconds
+            if file_path and file_path.exists():
+                try:
+                    import soundfile as sf
+                    duration = sf.info(str(file_path)).duration
+                    use_distributed = duration > min_duration
+                    logger.info(
+                        f"[{transcription_id}] 📊 DISTRIBUTION DECISION | "
+                        f"Duration: {duration:.1f}s | "
+                        f"Threshold: {min_duration}s | "
+                        f"Mode: {'DISTRIBUTED' if use_distributed else 'CLASSIC (single worker)'} | "
+                        f"Reason: {'Audio exceeds threshold' if use_distributed else 'Audio below threshold'}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[{transcription_id}] ⚠️ Could not get duration, using non-distributed mode: {e}")
+                    use_distributed = False
+            else:
+                use_distributed = False
+                logger.info(f"[{transcription_id}] 📊 DISTRIBUTION DECISION | Mode: CLASSIC (single worker) | Reason: File path not available")
+        
+        if use_distributed and file_path and file_path.exists():
+            # MODE DISTRIBUÉ : Découper et distribuer les segments
+            logger.info(
+                f"[{transcription_id}] 🚀 DISTRIBUTED MODE ACTIVATED | "
+                f"File: {Path(file_path).name} | "
+                f"Will split into segments and distribute across multiple workers"
+            )
+            
+            # Importer les fonctions de découpage (elles sont dans vocalyx-transcribe)
+            # On va créer les segments ici et les envoyer comme tâches séparées
+            from celery import current_app as celery_current_app
+            
+            # Créer les segments (on utilise la même logique que dans transcription_service.py)
+            # Pour l'instant, on va juste créer une tâche qui fera le découpage côté worker
+            # et qui lancera les sous-tâches
+            
+            # Envoyer une tâche spéciale qui va orchestrer le découpage et la distribution
+            orchestrate_task = celery_current_app.send_task(
+                'orchestrate_distributed_transcription',
+                args=[transcription_id, str(file_path)],
+                queue='transcription',
+                countdown=1
+            )
+            
+            logger.info(
+                f"[{transcription_id}] ✅ DISTRIBUTED MODE | "
+                f"Orchestration task enqueued | "
+                f"Task ID: {orchestrate_task.id} | "
+                f"Queue: transcription | "
+                f"Next: Worker will split audio and create segment tasks"
+            )
+            
+            return {
+                "transcription_id": transcription_id,
+                "task_id": self.request.id,
+                "orchestration_task_id": orchestrate_task.id,
+                "status": "queued_distributed",
+                "mode": "distributed"
+            }
+        else:
+            # MODE CLASSIQUE : Une seule tâche (rétrocompatibilité)
+            logger.info(
+                f"[{transcription_id}] 📝 CLASSIC MODE ACTIVATED | "
+                f"File: {Path(trans.file_path).name if trans.file_path else 'N/A'} | "
+                f"Single worker will process entire audio | "
+                f"Task ID: {self.request.id} | "
+                f"Queue: transcription"
+            )
+            return {
+                "transcription_id": transcription_id,
+                "task_id": self.request.id,
+                "status": "queued",
+                "mode": "classic"
+            }
+            
     except Exception as e:
-        logger.error(f"[{transcription_id}] Error updating task_id: {e}")
+        logger.error(f"[{transcription_id}] Error in transcribe_audio_task: {e}", exc_info=True)
         db.rollback()
+        return {
+            "transcription_id": transcription_id,
+            "status": "error",
+            "error": str(e)
+        }
     finally:
         db.close()
-    
-    # Le worker vocalyx-transcribe exécutera la transcription
-    return {
-        "transcription_id": transcription_id,
-        "task_id": self.request.id,
-        "status": "queued"
-    }
 
 def get_celery_stats():
     """

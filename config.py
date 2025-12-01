@@ -67,6 +67,10 @@ class Config:
             'allowed_extensions': 'wav,mp3,m4a,flac,ogg,webm'
         }
         
+        config['TRANSCRIPTION'] = {
+            'distributed_min_duration_seconds': '30'
+        }
+        
         with open(self.config_file, 'w') as f:
             config.write(f)
         
@@ -156,6 +160,14 @@ class Config:
         self.max_file_size_mb = self.config.getint('LIMITS', 'max_file_size_mb', fallback=100)
         extensions_str = self.config.get('LIMITS', 'allowed_extensions', fallback='wav,mp3')
         self.allowed_extensions = set(ext.strip().lower() for ext in extensions_str.split(','))
+        
+        # TRANSCRIPTION
+        # Seuil minimal (en secondes) pour activer le mode distribué
+        # Peut être surchargé par variable d'environnement DISTRIBUTED_MIN_DURATION_SECONDS
+        self.distributed_min_duration_seconds = int(os.environ.get(
+            'DISTRIBUTED_MIN_DURATION_SECONDS',
+            self.config.getint('TRANSCRIPTION', 'distributed_min_duration_seconds', fallback=30)
+        ))
     
     def reload(self):
         """Recharge la configuration depuis le fichier"""
