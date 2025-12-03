@@ -51,62 +51,78 @@ except ImportError:
 
 async def redis_pubsub_listener(redis_sub, manager: ConnectionManager, app_state):
     """Tâche de fond: Écoute Redis Pub/Sub et diffuse aux WebSockets."""
-    try:
-        await redis_sub.subscribe("vocalyx_updates")
-        logger.info("📡 Abonné au canal Redis 'vocalyx_updates'")
-        async for message in redis_sub.listen():
-            if message["type"] == "message":
-                message_data = message.get("data", "").decode("utf-8") if isinstance(message.get("data"), bytes) else message.get("data", "")
-                logger.info(f"📬 Message Pub/Sub reçu: {message_data}")
-                
-                # Si c'est une mise à jour de transcription spécifique, envoyer directement les données
-                if message_data.startswith("update_"):
-                    transcription_id = message_data.replace("update_", "")
-                    try:
-                        from database import SessionLocal, Transcription
-                        from api.endpoints import _get_allowed_project_names
-                        from database import User
-                        
-                        db = SessionLocal()
+    max_retries = 5
+    retry_delay = 5
+    
+    while True:
+        try:
+            await redis_sub.subscribe("vocalyx_updates")
+            logger.info("📡 Abonné au canal Redis 'vocalyx_updates'")
+            
+            async for message in redis_sub.listen():
+                if message["type"] == "message":
+                    message_data = message.get("data", "").decode("utf-8") if isinstance(message.get("data"), bytes) else message.get("data", "")
+                    logger.info(f"📬 Message Pub/Sub reçu: {message_data}")
+                    
+                    # Si c'est une mise à jour de transcription spécifique, envoyer directement les données
+                    if message_data.startswith("update_"):
+                        transcription_id = message_data.replace("update_", "")
                         try:
-                            transcription = db.query(Transcription).filter(Transcription.id == transcription_id).first()
-                            if transcription:
-                                # Envoyer directement la transcription mise à jour
-                                await manager.broadcast({
-                                    "type": "transcription_updated",
-                                    "data": {
-                                        "transcription": transcription.to_dict()
-                                    }
-                                })
-                                logger.info(f"✅ Transcription {transcription_id} envoyée directement via WebSocket")
-                            else:
-                                # Transcription non trouvée, envoyer un trigger général
-                                await manager.broadcast({
-                                    "type": "transcription_update_trigger"
-                                })
-                        finally:
-                            db.close()
-                    except Exception as e:
-                        logger.error(f"❌ Erreur lors de la récupération de la transcription: {e}", exc_info=True)
-                        # En cas d'erreur, envoyer un trigger général
+                            from database import SessionLocal, Transcription
+                            from api.endpoints import _get_allowed_project_names
+                            from database import User
+                            
+                            db = SessionLocal()
+                            try:
+                                transcription = db.query(Transcription).filter(Transcription.id == transcription_id).first()
+                                if transcription:
+                                    # Envoyer directement la transcription mise à jour
+                                    await manager.broadcast({
+                                        "type": "transcription_updated",
+                                        "data": {
+                                            "transcription": transcription.to_dict()
+                                        }
+                                    })
+                                    logger.info(f"✅ Transcription {transcription_id} envoyée directement via WebSocket")
+                                else:
+                                    # Transcription non trouvée, envoyer un trigger général
+                                    await manager.broadcast({
+                                        "type": "transcription_update_trigger"
+                                    })
+                            finally:
+                                db.close()
+                        except Exception as e:
+                            logger.error(f"❌ Erreur lors de la récupération de la transcription: {e}", exc_info=True)
+                            # En cas d'erreur, envoyer un trigger général
+                            await manager.broadcast({
+                                "type": "transcription_update_trigger"
+                            })
+                    else:
+                        # Pour les autres événements (new_transcription, delete_transcription), envoyer un trigger
+                        # Le client demandera les données mises à jour avec ses filtres actuels
                         await manager.broadcast({
                             "type": "transcription_update_trigger"
                         })
-                else:
-                    # Pour les autres événements (new_transcription, delete_transcription), envoyer un trigger
-                    # Le client demandera les données mises à jour avec ses filtres actuels
-                    await manager.broadcast({
-                        "type": "transcription_update_trigger"
-                    })
-                    logger.info("-> Trigger de mise à jour diffusé à tous les clients.")
-
-                            
-    except asyncio.CancelledError:
-        logger.info("🛑 Tâche Pub/Sub annulée.")
-    except Exception as e:
-        logger.error(f"❌ Erreur critique Pub/Sub: {e}", exc_info=True)
-    finally:
-        logger.info("Redis Pub/Sub listener arrêté.")
+                        logger.info("-> Trigger de mise à jour diffusé à tous les clients.")
+                        
+        except asyncio.CancelledError:
+            logger.info("🛑 Tâche Pub/Sub annulée.")
+            break
+        except Exception as e:
+            logger.error(f"❌ Erreur critique Pub/Sub: {e}", exc_info=True)
+            logger.info(f"🔄 Tentative de reconnexion dans {retry_delay} secondes...")
+            await asyncio.sleep(retry_delay)
+            # Réessayer de se reconnecter
+            try:
+                await redis_sub.unsubscribe("vocalyx_updates")
+            except:
+                pass
+            try:
+                await redis_sub.subscribe("vocalyx_updates")
+                logger.info("✅ Reconnexion au canal Redis 'vocalyx_updates' réussie")
+            except Exception as reconnect_error:
+                logger.error(f"❌ Échec de reconnexion: {reconnect_error}")
+                await asyncio.sleep(retry_delay)
 
 async def periodic_worker_stats(app_state, manager: ConnectionManager):
     """Tâche de fond: Polling des stats workers et diffusion aux WebSockets.
@@ -156,12 +172,14 @@ async def lifespan(app: FastAPI):
     logger.info(f"📁 Upload Directory: {config.upload_dir}")
     
     # Initialiser Redis pour Pub/Sub
+    redis_sub_conn = None
     try:
         redis_pub = await aioredis.from_url(config.redis_url)
         redis_sub_conn = await aioredis.from_url(config.redis_url)
         redis_sub = redis_sub_conn.pubsub()
         
         app.state.redis_pub = redis_pub
+        app.state.redis_sub_conn = redis_sub_conn
         
         # Démarrer les tâches de fond
         app.state.pubsub_task = asyncio.create_task(
@@ -171,9 +189,12 @@ async def lifespan(app: FastAPI):
             periodic_worker_stats(app.state, manager)
         )
         
+        logger.info("✅ Redis Pub/Sub initialisé et tâches de fond démarrées")
+        
     except Exception as e:
-        logger.error(f"❌ Échec de connexion à Redis (aioredis): {e}")
+        logger.error(f"❌ Échec de connexion à Redis (aioredis): {e}", exc_info=True)
         app.state.redis_pub = None
+        app.state.redis_sub_conn = None
         app.state.pubsub_task = None
         app.state.worker_stats_task = None
 
@@ -186,15 +207,23 @@ async def lifespan(app: FastAPI):
     
     # --- Shutdown ---
     logger.info("🛑 Arrêt de Vocalyx API")
-    if app.state.pubsub_task:
+    if hasattr(app.state, 'pubsub_task') and app.state.pubsub_task:
         app.state.pubsub_task.cancel()
-    if app.state.worker_stats_task:
+        try:
+            await app.state.pubsub_task
+        except asyncio.CancelledError:
+            pass
+    if hasattr(app.state, 'worker_stats_task') and app.state.worker_stats_task:
         app.state.worker_stats_task.cancel()
+        try:
+            await app.state.worker_stats_task
+        except asyncio.CancelledError:
+            pass
         
-    if app.state.redis_pub:
+    if hasattr(app.state, 'redis_pub') and app.state.redis_pub:
         await app.state.redis_pub.close()
-    if redis_sub_conn:
-        await redis_sub_conn.close()
+    if hasattr(app.state, 'redis_sub_conn') and app.state.redis_sub_conn:
+        await app.state.redis_sub_conn.close()
     
     logger.info("Tâches de fond arrêtées.")
 

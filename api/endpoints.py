@@ -884,7 +884,13 @@ async def create_transcription(
         # --- AJOUT PUBLISH REDIS ---
         redis_pub = request.app.state.redis_pub
         if redis_pub:
-            await redis_pub.publish("vocalyx_updates", "new_transcription")
+            try:
+                result = await redis_pub.publish("vocalyx_updates", "new_transcription")
+                logger.info(f"📤 Message Pub/Sub publié pour nouvelle transcription (subscribers: {result})")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de la publication Pub/Sub: {e}", exc_info=True)
+        else:
+            logger.warning("⚠️ Redis Pub/Sub non disponible, message non publié")
         # --- FIN AJOUT ---
             
         logger.info(f"[{transcription_id}] Transcription created for project '{project.name}' | Task: {task.id}")
@@ -1185,7 +1191,13 @@ async def update_transcription(
         # --- AJOUT PUBLISH REDIS ---
         redis_pub = request.app.state.redis_pub
         if redis_pub:
-            await redis_pub.publish("vocalyx_updates", f"update_{transcription_id}")
+            try:
+                result = await redis_pub.publish("vocalyx_updates", f"update_{transcription_id}")
+                logger.info(f"📤 Message Pub/Sub publié pour transcription {transcription_id} (subscribers: {result})")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de la publication Pub/Sub: {e}", exc_info=True)
+        else:
+            logger.warning("⚠️ Redis Pub/Sub non disponible, message non publié")
         # --- FIN AJOUT ---
             
         logger.info(f"[{transcription_id}] Updated: {update_data}")
@@ -1239,7 +1251,13 @@ async def delete_transcription(
     # --- AJOUT PUBLISH REDIS ---
     redis_pub = request.app.state.redis_pub
     if redis_pub:
-        await redis_pub.publish("vocalyx_updates", "delete_transcription")
+        try:
+            result = await redis_pub.publish("vocalyx_updates", "delete_transcription")
+            logger.info(f"📤 Message Pub/Sub publié pour suppression transcription (subscribers: {result})")
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la publication Pub/Sub: {e}", exc_info=True)
+    else:
+        logger.warning("⚠️ Redis Pub/Sub non disponible, message non publié")
     # --- FIN AJOUT ---
     
     logger.info(f"[{transcription_id}] Transcription deleted")
