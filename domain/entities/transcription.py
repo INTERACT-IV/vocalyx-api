@@ -41,8 +41,11 @@ class Transcription:
     enrichment_worker_id: Optional[str] = None
     enrichment_data: Optional[Dict[str, Any]] = None
     enrichment_error: Optional[str] = None
+    enrichment_processing_time: Optional[float] = None
     llm_model: Optional[str] = None
     enrichment_prompts: Optional[Dict[str, str]] = None
+    enhanced: bool = False  # Enrichissement avancé avec métadonnées (titre, résumé, etc.)
+    enhanced_text: Optional[str] = None  # Texte enrichi avec métadonnées (JSON stringifié)
     created_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     

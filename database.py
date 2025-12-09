@@ -209,6 +209,8 @@ class Transcription(Base):
             "enrichment_error": self.enrichment_error,
             "llm_model": self.llm_model,
             "enrichment_prompts": enrichment_prompts_dict,
+            "enhanced": bool(self.enhanced) if hasattr(self, 'enhanced') else False,
+            "enhanced_text": self.enhanced_text if hasattr(self, 'enhanced_text') else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
