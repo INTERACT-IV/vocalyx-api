@@ -123,7 +123,8 @@ class TranscriptionMapper:
             enrichment_processing_time=float(model.enrichment_processing_time) if model.enrichment_processing_time else None,
             llm_model=model.llm_model,
             enrichment_prompts=enrichment_prompts_dict,
-            enhanced=bool(model.enhanced) if hasattr(model, 'enhanced') else False,
+            text_correction=bool(model.text_correction) if hasattr(model, 'text_correction') else False,
+            enriched_text=model.enriched_text if hasattr(model, 'enriched_text') else None,
             enhanced_text=model.enhanced_text if hasattr(model, 'enhanced_text') else None,
             created_at=model.created_at,
             finished_at=model.finished_at
@@ -159,7 +160,8 @@ class TranscriptionMapper:
         model.enrichment_processing_time = transcription.enrichment_processing_time
         model.llm_model = transcription.llm_model
         model.enrichment_prompts = json.dumps(transcription.enrichment_prompts, ensure_ascii=False) if transcription.enrichment_prompts else None
-        model.enhanced = 1 if transcription.enhanced else 0
+        model.text_correction = 1 if transcription.text_correction else 0
+        model.enriched_text = transcription.enriched_text
         model.enhanced_text = transcription.enhanced_text
         model.created_at = transcription.created_at
         model.finished_at = transcription.finished_at

@@ -117,8 +117,9 @@ class TranscriptionModel(Base):
     enrichment_processing_time = Column(Float, nullable=True)  # Temps de traitement de l'enrichissement
     llm_model = Column(String, nullable=True)  # Modèle LLM utilisé
     enrichment_prompts = Column(Text, nullable=True)  # JSON avec les prompts personnalisés
-    enhanced = Column(Integer, default=0)  # Enrichissement avancé avec métadonnées (titre, résumé, etc.)
-    enhanced_text = Column(Text, nullable=True)  # Texte enrichi avec métadonnées (JSON stringifié)
+    text_correction = Column(Integer, default=0)  # Correction du texte (orthographe, grammaire) - option séparée
+    enriched_text = Column(Text, nullable=True)  # Texte corrigé si text_correction=true
+    enhanced_text = Column(Text, nullable=True)  # Texte enrichi avec métadonnées (JSON stringifié) - généré par défaut si enrichment=true
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

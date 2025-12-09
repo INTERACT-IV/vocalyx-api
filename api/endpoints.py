@@ -776,7 +776,7 @@ async def create_transcription(
     diarization: bool = Form(False),
     whisper_model: str = Form("small"),
     enrichment: bool = Form(False),
-    enhanced: bool = Form(False),  # Enrichissement avancé avec métadonnées (titre, résumé, etc.)
+    text_correction: bool = Form(False),  # Correction du texte (orthographe, grammaire) - option séparée et coûteuse
     llm_model: Optional[str] = Form(None),
     enrichment_prompts: Optional[str] = Form(None),  # JSON stringifié
     project: Project = Depends(verify_project_key),
@@ -852,7 +852,7 @@ async def create_transcription(
         vad_enabled=1 if use_vad else 0,
         diarization_enabled=1 if diarization else 0,
         enrichment_requested=1 if enrichment else 0,
-        enhanced=1 if enhanced else 0,  # Enrichissement avancé avec métadonnées
+        text_correction=1 if text_correction else 0,  # Correction du texte (orthographe, grammaire)
         llm_model=llm_model,
         enrichment_status="pending" if enrichment else None,
         enrichment_prompts=json.dumps(enrichment_prompts_dict, ensure_ascii=False) if enrichment_prompts_dict else None,

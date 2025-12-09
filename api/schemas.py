@@ -91,8 +91,9 @@ class TranscriptionResponse(BaseModel):
     enrichment_processing_time: Optional[float] = None
     llm_model: Optional[str] = None
     enrichment_prompts: Optional[Dict[str, str]] = None
-    enhanced: Optional[bool] = None  # Enrichissement avancé avec métadonnées
-    enhanced_text: Optional[str] = None  # Texte enrichi avec métadonnées (JSON stringifié)
+    text_correction: Optional[bool] = None  # Correction du texte (orthographe, grammaire) - option séparée
+    enriched_text: Optional[str] = None  # Texte corrigé si text_correction=true
+    enhanced_text: Optional[str] = None  # Texte enrichi avec métadonnées (JSON stringifié) - généré par défaut si enrichment=true
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
 
