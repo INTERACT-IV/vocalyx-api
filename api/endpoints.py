@@ -815,6 +815,15 @@ async def create_transcription(
             detail=f"Invalid whisper_model '{whisper_model}'. Valid models: {', '.join(valid_models)}"
         )
     
+    # 2.5. Validation du modèle LLM (si fourni)
+    if llm_model:
+        valid_llm_models = ["qwen2.5-7b-instruct", "mistral-7b-instruct", "phi-3-mini"]
+        if llm_model not in valid_llm_models:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid llm_model '{llm_model}'. Valid models: {', '.join(valid_llm_models)}"
+            )
+    
     # 3. Sauvegarder le fichier
     transcription_id = str(uuid.uuid4())
     safe_filename = f"{transcription_id}_{filename}"
