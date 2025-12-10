@@ -45,7 +45,7 @@ class TranscriptionCreate(BaseModel):
     use_vad: bool = True
     whisper_model: Optional[str] = Field(
         default="small",
-        description="Modèle Whisper à utiliser: tiny, base, small, medium"
+        description="Modèle Whisper à utiliser: tiny, base, small, medium, large-v3-turbo"
     )
 
 class TranscriptionUpdate(BaseModel):
