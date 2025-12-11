@@ -65,6 +65,8 @@ class TranscriptionUpdate(BaseModel):
     enrichment_error: Optional[str] = None
     enrichment_processing_time: Optional[float] = None
     llm_model: Optional[str] = None  # Modèle LLM utilisé pour l'enrichissement
+    enrichment_prompts: Optional[str] = None  # Prompts utilisés pour l'enrichissement (JSON stringifié)
+    enriched_segments: Optional[str] = None  # Segments enrichis (JSON stringifié)
 
 class TranscriptionResponse(BaseModel):
     """Schéma pour retourner une transcription"""

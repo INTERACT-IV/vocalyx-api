@@ -1306,7 +1306,7 @@ async def update_transcription(
     
     update_data = update.dict(exclude_unset=True)
     
-    # Gérer les champs JSON (enrichment_data)
+    # Gérer les champs JSON (enrichment_data, enrichment_prompts)
     if 'enrichment_data' in update_data and update_data['enrichment_data'] is not None:
         if isinstance(update_data['enrichment_data'], str):
             # Si c'est déjà une string JSON, la garder telle quelle
@@ -1315,6 +1315,13 @@ async def update_transcription(
             # Si c'est un dict, le convertir en JSON string
             import json
             update_data['enrichment_data'] = json.dumps(update_data['enrichment_data'], ensure_ascii=False)
+    
+    # enrichment_prompts devrait déjà être une string JSON depuis le worker, mais on vérifie
+    if 'enrichment_prompts' in update_data and update_data['enrichment_prompts'] is not None:
+        if not isinstance(update_data['enrichment_prompts'], str):
+            # Si c'est un dict, le convertir en JSON string
+            import json
+            update_data['enrichment_prompts'] = json.dumps(update_data['enrichment_prompts'], ensure_ascii=False)
     
     for key, value in update_data.items():
         if hasattr(transcription, key):
