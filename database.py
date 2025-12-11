@@ -210,6 +210,7 @@ class Transcription(Base):
             "enrichment_worker_id": self.enrichment_worker_id,
             "enrichment_data": enrichment_data_dict,
             "enrichment_error": self.enrichment_error,
+            "enrichment_processing_time": float(self.enrichment_processing_time) if self.enrichment_processing_time else None,
             "llm_model": self.llm_model,
             "enrichment_prompts": enrichment_prompts_dict,
             "text_correction": bool(self.text_correction) if hasattr(self, 'text_correction') else False,
