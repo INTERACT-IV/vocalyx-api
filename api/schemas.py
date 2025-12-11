@@ -170,3 +170,22 @@ class UserProjectLink(BaseModel):
 class UserPasswordUpdate(BaseModel):
     """Schéma pour mettre à jour un mot de passe"""
     password: str = Field(..., min_length=4)
+
+# ============================================================================
+# ENRICHISSEMENT
+# ============================================================================
+
+class ReEnrichmentRequest(BaseModel):
+    """Schéma pour relancer l'enrichissement d'une transcription"""
+    llm_model: Optional[str] = Field(
+        None,
+        description="Modèle LLM à utiliser: qwen2.5-7b-instruct, mistral-7b-instruct, phi-3-mini"
+    )
+    enrichment_prompts: Optional[Dict[str, str]] = Field(
+        None,
+        description="Prompts personnalisés pour l'enrichissement (JSON)"
+    )
+    text_correction: Optional[bool] = Field(
+        None,
+        description="Activer la correction du texte (orthographe, grammaire)"
+    )

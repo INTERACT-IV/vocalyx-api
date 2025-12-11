@@ -33,9 +33,9 @@ from api.dependencies import (
 from api.schemas import (
     TranscriptionResponse, TranscriptionCreate, TranscriptionUpdate,
     ProjectResponse, ProjectCreate, ProjectDetails,
-    TranscriptionCountResponse, TaskStatusResponse
+    TranscriptionCountResponse, TaskStatusResponse, ReEnrichmentRequest
 )
-from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats
+from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats, trigger_enrichment_task
 
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
@@ -1149,6 +1149,134 @@ def get_user_transcription(
     
     return transcription.to_dict()
 
+@router.post("/user/transcriptions/{transcription_id}/re-enrich", response_model=TaskStatusResponse, tags=["Transcriptions"])
+async def re_enrich_user_transcription(
+    transcription_id: str,
+    re_enrichment_request: ReEnrichmentRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """
+    Relance l'enrichissement d'une transcription existante (pour utilisateurs authentifiés).
+    Permet de :
+    - Tester un autre modèle LLM
+    - Régénérer le résultat avec les mêmes ou de nouveaux paramètres
+    
+    Nécessite un token JWT valide et l'accès à la transcription.
+    """
+    # 1. Vérifier que la transcription existe et que l'utilisateur y a accès
+    transcription = db.query(Transcription).filter(
+        Transcription.id == transcription_id
+    ).first()
+    
+    if not transcription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transcription '{transcription_id}' not found"
+        )
+    
+    allowed_projects = _get_allowed_project_names(db, current_user)
+    if allowed_projects is not None and transcription.project_name not in allowed_projects:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access to this transcription is forbidden"
+        )
+    
+    # 2. Vérifier que la transcription a des segments (nécessaire pour l'enrichissement)
+    if not transcription.segments:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Transcription has no segments. Enrichment requires a completed transcription."
+        )
+    
+    # 3. Valider le modèle LLM si fourni
+    if re_enrichment_request.llm_model:
+        valid_llm_models = ["qwen2.5-7b-instruct", "mistral-7b-instruct", "phi-3-mini"]
+        if re_enrichment_request.llm_model not in valid_llm_models:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid llm_model '{re_enrichment_request.llm_model}'. Valid models: {', '.join(valid_llm_models)}"
+            )
+    
+    # 4. Mettre à jour les paramètres d'enrichissement dans la DB
+    update_data = {
+        "enrichment_status": "pending",
+        "enrichment_requested": 1,
+        "enrichment_error": None  # Réinitialiser les erreurs précédentes
+    }
+    
+    if re_enrichment_request.llm_model:
+        update_data["llm_model"] = re_enrichment_request.llm_model
+    
+    if re_enrichment_request.enrichment_prompts is not None:
+        import json
+        update_data["enrichment_prompts"] = json.dumps(re_enrichment_request.enrichment_prompts, ensure_ascii=False)
+    
+    if re_enrichment_request.text_correction is not None:
+        update_data["text_correction"] = 1 if re_enrichment_request.text_correction else 0
+    
+    # Appliquer les mises à jour
+    for key, value in update_data.items():
+        if hasattr(transcription, key):
+            setattr(transcription, key, value)
+    
+    try:
+        db.commit()
+        db.refresh(transcription)
+        logger.info(f"[{transcription_id}] ✅ Enrichment parameters updated by user {current_user.username}: {update_data}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[{transcription_id}] ❌ Failed to update enrichment parameters: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update enrichment parameters"
+        )
+    
+    # 5. Déclencher la tâche d'enrichissement
+    try:
+        task_result = trigger_enrichment_task(transcription_id)
+        
+        # --- AJOUT PUBLISH REDIS ---
+        redis_pub = request.app.state.redis_pub
+        if redis_pub:
+            try:
+                result = await redis_pub.publish("vocalyx_updates", f"re_enrich_{transcription_id}")
+                logger.info(f"📤 Message Pub/Sub publié pour re-enrichissement {transcription_id} (subscribers: {result})")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de la publication Pub/Sub: {e}", exc_info=True)
+        else:
+            logger.warning("⚠️ Redis Pub/Sub non disponible, message non publié")
+        # --- FIN AJOUT ---
+        
+        logger.info(f"[{transcription_id}] ✅ Re-enrichment task triggered by user {current_user.username}: {task_result['task_id']}")
+        
+        return {
+            "task_id": task_result["task_id"],
+            "status": "PENDING",
+            "result": None,
+            "info": {
+                "transcription_id": transcription_id,
+                "llm_model": re_enrichment_request.llm_model or transcription.llm_model,
+                "message": "Enrichment task queued successfully"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"[{transcription_id}] ❌ Failed to trigger enrichment task: {e}", exc_info=True)
+        # Mettre à jour le statut à "error"
+        try:
+            transcription.enrichment_status = "error"
+            transcription.enrichment_error = f"Failed to trigger enrichment: {str(e)}"
+            db.commit()
+        except:
+            db.rollback()
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger enrichment task: {str(e)}"
+        )
+
 # ============================================================================
 # TRANSCRIPTIONS - MISE À JOUR (pour les workers)
 # ============================================================================
@@ -1277,6 +1405,131 @@ async def delete_transcription(
         "status": "deleted",
         "id": transcription_id
     }
+
+# ============================================================================
+# ENRICHISSEMENT - RELANCE
+# ============================================================================
+
+@router.post("/transcriptions/{transcription_id}/re-enrich", response_model=TaskStatusResponse, tags=["Transcriptions"])
+async def re_enrich_transcription(
+    transcription_id: str,
+    re_enrichment_request: ReEnrichmentRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: bool = Depends(verify_internal_key)
+):
+    """
+    Relance l'enrichissement d'une transcription existante.
+    Permet de :
+    - Tester un autre modèle LLM
+    - Régénérer le résultat avec les mêmes ou de nouveaux paramètres
+    
+    Endpoint interne (nécessite X-Internal-Key).
+    """
+    # 1. Vérifier que la transcription existe
+    transcription = db.query(Transcription).filter(
+        Transcription.id == transcription_id
+    ).first()
+    
+    if not transcription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transcription '{transcription_id}' not found"
+        )
+    
+    # 2. Vérifier que la transcription a des segments (nécessaire pour l'enrichissement)
+    if not transcription.segments:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Transcription has no segments. Enrichment requires a completed transcription."
+        )
+    
+    # 3. Valider le modèle LLM si fourni
+    if re_enrichment_request.llm_model:
+        valid_llm_models = ["qwen2.5-7b-instruct", "mistral-7b-instruct", "phi-3-mini"]
+        if re_enrichment_request.llm_model not in valid_llm_models:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid llm_model '{re_enrichment_request.llm_model}'. Valid models: {', '.join(valid_llm_models)}"
+            )
+    
+    # 4. Mettre à jour les paramètres d'enrichissement dans la DB
+    update_data = {
+        "enrichment_status": "pending",
+        "enrichment_requested": 1,
+        "enrichment_error": None  # Réinitialiser les erreurs précédentes
+    }
+    
+    if re_enrichment_request.llm_model:
+        update_data["llm_model"] = re_enrichment_request.llm_model
+    
+    if re_enrichment_request.enrichment_prompts is not None:
+        import json
+        update_data["enrichment_prompts"] = json.dumps(re_enrichment_request.enrichment_prompts, ensure_ascii=False)
+    
+    if re_enrichment_request.text_correction is not None:
+        update_data["text_correction"] = 1 if re_enrichment_request.text_correction else 0
+    
+    # Appliquer les mises à jour
+    for key, value in update_data.items():
+        if hasattr(transcription, key):
+            setattr(transcription, key, value)
+    
+    try:
+        db.commit()
+        db.refresh(transcription)
+        logger.info(f"[{transcription_id}] ✅ Enrichment parameters updated: {update_data}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[{transcription_id}] ❌ Failed to update enrichment parameters: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update enrichment parameters"
+        )
+    
+    # 5. Déclencher la tâche d'enrichissement
+    try:
+        task_result = trigger_enrichment_task(transcription_id)
+        
+        # --- AJOUT PUBLISH REDIS ---
+        redis_pub = request.app.state.redis_pub
+        if redis_pub:
+            try:
+                result = await redis_pub.publish("vocalyx_updates", f"re_enrich_{transcription_id}")
+                logger.info(f"📤 Message Pub/Sub publié pour re-enrichissement {transcription_id} (subscribers: {result})")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de la publication Pub/Sub: {e}", exc_info=True)
+        else:
+            logger.warning("⚠️ Redis Pub/Sub non disponible, message non publié")
+        # --- FIN AJOUT ---
+        
+        logger.info(f"[{transcription_id}] ✅ Re-enrichment task triggered: {task_result['task_id']}")
+        
+        return {
+            "task_id": task_result["task_id"],
+            "status": "PENDING",
+            "result": None,
+            "info": {
+                "transcription_id": transcription_id,
+                "llm_model": re_enrichment_request.llm_model or transcription.llm_model,
+                "message": "Enrichment task queued successfully"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"[{transcription_id}] ❌ Failed to trigger enrichment task: {e}", exc_info=True)
+        # Mettre à jour le statut à "error"
+        try:
+            transcription.enrichment_status = "error"
+            transcription.enrichment_error = f"Failed to trigger enrichment: {str(e)}"
+            db.commit()
+        except:
+            db.rollback()
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger enrichment task: {str(e)}"
+        )
 
 # ============================================================================
 # WORKERS & CELERY

@@ -337,6 +337,34 @@ def cancel_task(task_id: str):
         "status": "cancelled"
     }
 
+def trigger_enrichment_task(transcription_id: str):
+    """
+    Déclenche une tâche d'enrichissement pour une transcription.
+    
+    Args:
+        transcription_id: ID de la transcription à enrichir
+        
+    Returns:
+        dict: Informations sur la tâche créée
+    """
+    try:
+        logger.info(f"[{transcription_id}] 🤖 Triggering enrichment task...")
+        enrich_task = celery_app.send_task(
+            'enrich_transcription',
+            args=[transcription_id],
+            queue='enrichment',
+            countdown=1
+        )
+        logger.info(f"[{transcription_id}] ✅ Enrichment task enqueued: {enrich_task.id}")
+        return {
+            "task_id": enrich_task.id,
+            "status": "queued",
+            "transcription_id": transcription_id
+        }
+    except Exception as e:
+        logger.error(f"[{transcription_id}] ❌ Failed to enqueue enrichment task: {e}", exc_info=True)
+        raise
+
 if __name__ == "__main__":
     # Pour lancer un worker depuis cette API (déconseillé, utiliser vocalyx-transcribe)
     celery_app.worker_main([
