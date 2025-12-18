@@ -112,7 +112,7 @@ class Transcription(Base):
     
     id = Column(String, primary_key=True, index=True)
     status = Column(
-        Enum("pending", "processing", "transcribed", "done", "error", name="transcription_status"),
+        Enum("pending", "queued", "processing", "transcribed", "done", "error", name="transcription_status"),
         default="pending",
         index=True
     )
@@ -159,7 +159,13 @@ class Transcription(Base):
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    queued_at = Column(DateTime, nullable=True)  # ✅ NOUVEAU : Quand la tâche a été envoyée à Celery
+    processing_start_time = Column(DateTime, nullable=True)  # ✅ NOUVEAU : Quand le worker a commencé le traitement
+    processing_end_time = Column(DateTime, nullable=True)  # ✅ NOUVEAU : Quand le worker a terminé le traitement
     finished_at = Column(DateTime, nullable=True)
+    
+    # Métriques de performance
+    queue_wait_time = Column(Float, nullable=True)  # ✅ NOUVEAU : Temps d'attente dans la file (secondes)
     
     def to_dict(self):
         """Convertit l'objet en dictionnaire"""
@@ -214,9 +220,13 @@ class Transcription(Base):
             "llm_model": self.llm_model,
             "enrichment_prompts": enrichment_prompts_dict,
             "text_correction": bool(self.text_correction) if hasattr(self, 'text_correction') else False,
-            "enriched_text": self.enriched_text if hasattr(self, 'enriched_text') else None,
+            "enriched_text": self.enriched_text if hasattr(self, 'enhanced_text') else None,
             "enhanced_text": self.enhanced_text if hasattr(self, 'enhanced_text') else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "queued_at": self.queued_at.isoformat() if hasattr(self, 'queued_at') and self.queued_at else None,  # ✅ NOUVEAU
+            "processing_start_time": self.processing_start_time.isoformat() if hasattr(self, 'processing_start_time') and self.processing_start_time else None,  # ✅ NOUVEAU
+            "processing_end_time": self.processing_end_time.isoformat() if hasattr(self, 'processing_end_time') and self.processing_end_time else None,  # ✅ NOUVEAU
+            "queue_wait_time": float(self.queue_wait_time) if hasattr(self, 'queue_wait_time') and self.queue_wait_time else None,  # ✅ NOUVEAU
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
 

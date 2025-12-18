@@ -890,6 +890,10 @@ async def create_transcription(
         )
         
         transcription.celery_task_id = task.id
+        # ✅ NOUVEAU : Passer le statut à "queued" quand la tâche est envoyée à Celery
+        transcription.status = "queued"
+        # ✅ NOUVEAU : Enregistrer le temps d'envoi à la file (pour calculer l'attente)
+        transcription.queued_at = datetime.utcnow()
         db.commit()
         
         # --- AJOUT PUBLISH REDIS ---
@@ -1617,3 +1621,206 @@ def cancel_task_endpoint(
     Annule une tâche Celery.
     """
     return cancel_task(task_id)
+
+# ============================================================================
+# MÉTRIQUES
+# ============================================================================
+
+@router.get("/transcriptions/metrics", tags=["Metrics"])
+def get_transcription_metrics(
+    start_date: Optional[str] = Query(None, description="Date de début (ISO format)"),
+    end_date: Optional[str] = Query(None, description="Date de fin (ISO format)"),
+    project: Optional[str] = Query(None, description="Filtrer par projet"),
+    db: Session = Depends(get_db)
+):
+    """
+    Récupère les métriques de performance des transcriptions.
+    
+    Retourne :
+    - Temps moyen d'attente dans la file
+    - Temps moyen de traitement réel
+    - Ratio attente/traitement
+    - Distribution des temps
+    """
+    from datetime import datetime
+    
+    query = db.query(Transcription).filter(
+        Transcription.status == 'done',
+        Transcription.processing_time != None
+    )
+    
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            query = query.filter(Transcription.created_at >= start_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid start_date format. Use ISO format (e.g., 2025-01-01T00:00:00Z)"
+            )
+    
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            query = query.filter(Transcription.created_at <= end_dt)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid end_date format. Use ISO format (e.g., 2025-01-01T00:00:00Z)"
+            )
+    
+    if project:
+        query = query.filter(Transcription.project_name == project)
+    
+    transcriptions = query.all()
+    
+    metrics = {
+        "total_transcriptions": len(transcriptions),
+        "avg_processing_time": 0.0,
+        "avg_queue_wait_time": 0.0,
+        "avg_total_time": 0.0,
+        "max_processing_time": 0.0,
+        "max_queue_wait_time": 0.0,
+        "min_processing_time": 0.0,
+        "min_queue_wait_time": 0.0,
+        "processing_time_distribution": {},
+        "queue_wait_time_distribution": {}
+    }
+    
+    if transcriptions:
+        processing_times = [t.processing_time for t in transcriptions if t.processing_time]
+        queue_wait_times = [t.queue_wait_time for t in transcriptions if t.queue_wait_time]
+        
+        if processing_times:
+            metrics["avg_processing_time"] = round(sum(processing_times) / len(processing_times), 2)
+            metrics["max_processing_time"] = round(max(processing_times), 2)
+            metrics["min_processing_time"] = round(min(processing_times), 2)
+        
+        if queue_wait_times:
+            metrics["avg_queue_wait_time"] = round(sum(queue_wait_times) / len(queue_wait_times), 2)
+            metrics["max_queue_wait_time"] = round(max(queue_wait_times), 2)
+            metrics["min_queue_wait_time"] = round(min(queue_wait_times), 2)
+        
+        # Calculer le temps total moyen (attente + traitement)
+        total_times = []
+        for t in transcriptions:
+            if t.processing_time and t.queue_wait_time:
+                total_times.append(t.processing_time + t.queue_wait_time)
+        if total_times:
+            metrics["avg_total_time"] = round(sum(total_times) / len(total_times), 2)
+        
+        # Distribution par tranches (pour graphiques)
+        # Temps de traitement : 0-30s, 30-60s, 1-5min, 5-15min, 15-30min, 30min+
+        processing_dist = {
+            "0-30s": 0,
+            "30-60s": 0,
+            "1-5min": 0,
+            "5-15min": 0,
+            "15-30min": 0,
+            "30min+": 0
+        }
+        
+        for pt in processing_times:
+            if pt <= 30:
+                processing_dist["0-30s"] += 1
+            elif pt <= 60:
+                processing_dist["30-60s"] += 1
+            elif pt <= 300:
+                processing_dist["1-5min"] += 1
+            elif pt <= 900:
+                processing_dist["5-15min"] += 1
+            elif pt <= 1800:
+                processing_dist["15-30min"] += 1
+            else:
+                processing_dist["30min+"] += 1
+        
+        metrics["processing_time_distribution"] = processing_dist
+        
+        # Temps d'attente : 0-1min, 1-5min, 5-15min, 15-30min, 30min+
+        queue_dist = {
+            "0-1min": 0,
+            "1-5min": 0,
+            "5-15min": 0,
+            "15-30min": 0,
+            "30min+": 0
+        }
+        
+        for qwt in queue_wait_times:
+            if qwt <= 60:
+                queue_dist["0-1min"] += 1
+            elif qwt <= 300:
+                queue_dist["1-5min"] += 1
+            elif qwt <= 900:
+                queue_dist["5-15min"] += 1
+            elif qwt <= 1800:
+                queue_dist["15-30min"] += 1
+            else:
+                queue_dist["30min+"] += 1
+        
+        metrics["queue_wait_time_distribution"] = queue_dist
+    
+    return metrics
+
+@router.get("/transcriptions/{transcription_id}/ttl-health", tags=["Monitoring"])
+def get_ttl_health(
+    transcription_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Récupère l'état de santé du TTL Redis pour une transcription.
+    Utile pour le monitoring et le debugging.
+    """
+    transcription = db.query(Transcription).filter(
+        Transcription.id == transcription_id
+    ).first()
+    
+    if not transcription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transcription '{transcription_id}' not found"
+        )
+    
+    # Vérifier si la transcription est en cours de traitement
+    if transcription.status not in ['processing', 'queued']:
+        return {
+            "transcription_id": transcription_id,
+            "status": transcription.status,
+            "message": "Transcription not in processing state, TTL check not applicable",
+            "ttl_health": None
+        }
+    
+    # Importer le gestionnaire Redis (nécessite d'accéder au worker)
+    # Note: Cette fonctionnalité nécessite que le worker soit accessible
+    # Pour l'instant, on retourne une indication que la vérification nécessite l'accès Redis
+    try:
+        from infrastructure.external.redis_client import get_redis_client
+        from vocalyx_transcribe.infrastructure.redis.redis_manager import (
+            RedisTranscriptionManager, 
+            RedisCompressionManager
+        )
+        
+        redis_client = get_redis_client()
+        compression = RedisCompressionManager(enabled=True)
+        redis_manager = RedisTranscriptionManager(redis_client, compression)
+        
+        health = redis_manager.check_ttl_health(transcription_id)
+        
+        return {
+            "transcription_id": transcription_id,
+            "status": transcription.status,
+            "ttl_health": health
+        }
+    except ImportError:
+        # Si les modules ne sont pas disponibles (normal si on est dans l'API)
+        return {
+            "transcription_id": transcription_id,
+            "status": transcription.status,
+            "message": "TTL health check requires access to Redis transcription manager (available in worker)",
+            "ttl_health": None
+        }
+    except Exception as e:
+        logger.error(f"Error checking TTL health: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check TTL health: {str(e)}"
+        )
