@@ -44,7 +44,6 @@ class Config:
         }
         
         config['SECURITY'] = {
-            'internal_api_key': 'CHANGE_ME_SECRET_INTERNAL_KEY',
             'admin_project_name': 'ISICOMTECH',
             'jwt_secret_key': 'CHANGE_ME_SUPER_SECRET_KEY_FOR_JWT_123456',
             'jwt_algorithm': 'HS256',
@@ -110,10 +109,6 @@ class Config:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         
         # SECURITY
-        self.internal_api_key = os.environ.get(
-            'INTERNAL_API_KEY', 
-            self.config.get('SECURITY', 'internal_api_key')
-        )
         self.admin_project_name = os.environ.get(
             'ADMIN_PROJECT_NAME', 
             self.config.get('SECURITY', 'admin_project_name')
@@ -128,9 +123,6 @@ class Config:
         
         if self.jwt_secret_key == 'CHANGE_ME_SUPER_SECRET_KEY_FOR_JWT_123456':
             logging.warning("⚠️ SECURITY: JWT Secret Key is using default value. Please change it!")
-        
-        if self.internal_api_key == 'CHANGE_ME_SECRET_INTERNAL_KEY':
-            logging.warning("⚠️ SECURITY: Internal API key is using default value. Please change it!")
         
         # CORS
         default_origins = self.config.get('CORS', 'origins', fallback='*')

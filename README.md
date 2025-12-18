@@ -69,7 +69,6 @@ Variables d'environnement principales :
 - `REDIS_URL` : URL de connexion Redis
 - `CELERY_BROKER_URL` : URL du broker Celery
 - `CELERY_RESULT_BACKEND` : Backend de résultats Celery
-- `INTERNAL_API_KEY` : Clé pour la communication interne
 - `ADMIN_PROJECT_NAME` : Nom du projet administrateur
 - `CORS_ORIGINS` : Origines autorisées pour CORS
 - `LOG_LEVEL` : Niveau de logging (DEBUG, INFO, WARNING, ERROR)

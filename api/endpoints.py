@@ -27,7 +27,7 @@ from jose import JWTError, jwt
 
 from database import Transcription, Project, User, SessionLocal
 from api.dependencies import (
-    get_db, verify_project_key, verify_internal_key, verify_admin_key,
+    get_db, verify_project_key, verify_admin_key,
     get_user_from_websocket
 )
 from api.schemas import (
@@ -930,12 +930,10 @@ def list_transcriptions(
     status: Optional[str] = Query(None),
     project: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Liste les transcriptions avec pagination et filtres.
-    Endpoint interne (nécessite X-Internal-Key)
     """
     query = db.query(Transcription)
     
@@ -963,7 +961,6 @@ def count_transcriptions(
 ):
     """
     Compte les transcriptions avec filtres et retourne les stats globales.
-    Endpoint interne (nécessite X-Internal-Key)
     """
     filtered_query = db.query(Transcription)
     if status:
@@ -1004,7 +1001,6 @@ def get_transcription(
 ):
     """
     Récupère une transcription par son ID.
-    Endpoint interne (nécessite X-Internal-Key)
     """
     transcription = db.query(Transcription).filter(
         Transcription.id == transcription_id
@@ -1286,12 +1282,10 @@ async def update_transcription(
     transcription_id: str,
     update: TranscriptionUpdate,
     request: Request,
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Met à jour une transcription (utilisé par les workers).
-    Endpoint interne (nécessite X-Internal-Key).
     PUBLIE une mise à jour sur Redis.
     """
     transcription = db.query(Transcription).filter(
@@ -1364,12 +1358,10 @@ async def update_transcription(
 async def delete_transcription(
     transcription_id: str,
     request: Request,
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Supprime une transcription et son fichier audio.
-    Endpoint interne (nécessite X-Internal-Key).
     PUBLIE une mise à jour sur Redis.
     """
     transcription = db.query(Transcription).filter(
@@ -1422,16 +1414,13 @@ async def re_enrich_transcription(
     transcription_id: str,
     re_enrichment_request: ReEnrichmentRequest,
     request: Request,
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Relance l'enrichissement d'une transcription existante.
     Permet de :
     - Tester un autre modèle LLM
     - Régénérer le résultat avec les mêmes ou de nouveaux paramètres
-    
-    Endpoint interne (nécessite X-Internal-Key).
     """
     # 1. Vérifier que la transcription existe
     transcription = db.query(Transcription).filter(
@@ -1544,12 +1533,10 @@ async def re_enrich_transcription(
 
 @router.get("/workers", tags=["Workers"])
 def list_workers(
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Liste les workers Celery actifs et leurs statistiques.
-    Endpoint interne (nécessite X-Internal-Key).
     Calcule également les stats depuis la DB.
     """
     stats = get_celery_stats() 
@@ -1617,22 +1604,18 @@ def list_workers(
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse, tags=["Tasks"])
 def get_task(
-    task_id: str,
-    _: bool = Depends(verify_internal_key)
+    task_id: str
 ):
     """
     Récupère le statut d'une tâche Celery.
-    Endpoint interne (nécessite X-Internal-Key)
     """
     return get_task_status(task_id)
 
 @router.post("/tasks/{task_id}/cancel", tags=["Tasks"])
 def cancel_task_endpoint(
-    task_id: str,
-    _: bool = Depends(verify_internal_key)
+    task_id: str
 ):
     """
     Annule une tâche Celery.
-    Endpoint interne (nécessite X-Internal-Key)
     """
     return cancel_task(task_id)

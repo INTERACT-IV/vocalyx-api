@@ -49,26 +49,6 @@ def verify_project_key(
     
     return project
 
-def verify_internal_key(
-    x_internal_key: str = Header(..., alias="X-Internal-Key")
-) -> bool:
-    """
-    Vérifie la clé interne pour les communications inter-services
-    """
-    if not config.internal_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Internal API key not configured"
-        )
-    
-    if not secrets.compare_digest(config.internal_api_key, x_internal_key):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid internal API key"
-        )
-    
-    return True
-
 def verify_admin_key(
     x_api_key: str = Header(..., alias="X-API-Key"),
     db: Session = Depends(get_db)
