@@ -21,7 +21,6 @@ result_backend = redis://vocalyx-redis:6379/0
 upload_dir = /home/shinohk/code/vocalyx-all/shared/uploads
 
 [SECURITY]
-
 # Nom du projet administrateur (pour la gestion des projets)
 admin_project_name = ISICOMTECH
 
