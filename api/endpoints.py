@@ -956,8 +956,7 @@ def count_transcriptions(
     status: Optional[str] = Query(None),
     project: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Compte les transcriptions avec filtres et retourne les stats globales.
@@ -996,8 +995,7 @@ def count_transcriptions(
 @router.get("/transcriptions/{transcription_id}", response_model=TranscriptionResponse, tags=["Transcriptions"])
 def get_transcription(
     transcription_id: str,
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_internal_key)
+    db: Session = Depends(get_db)
 ):
     """
     Récupère une transcription par son ID.
