@@ -35,7 +35,7 @@ from api.schemas import (
     ProjectResponse, ProjectCreate, ProjectDetails,
     TranscriptionCountResponse, TaskStatusResponse, ReEnrichmentRequest
 )
-from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats, trigger_enrichment_task
+from celery_app import transcribe_audio_task, get_task_status, cancel_task, get_celery_stats, trigger_enrichment_task, check_worker_availability
 
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
@@ -881,7 +881,15 @@ async def create_transcription(
             detail="Failed to create database entry"
         )
     
-    # 4. Envoyer la tâche à Celery
+    # 4. Vérifier la disponibilité des workers (pour logging uniquement)
+    worker_available, availability_message = check_worker_availability(queue_name='transcription')
+    if not worker_available:
+        logger.info(f"[{transcription_id}] ⚠️ Aucun worker disponible immédiatement: {availability_message}. La transcription sera mise en file d'attente.")
+    else:
+        logger.info(f"[{transcription_id}] ✅ Worker disponible: {availability_message}")
+    
+    # 5. Envoyer la tâche à Celery (même si aucun worker n'est disponible immédiatement)
+    # Celery gérera automatiquement la file d'attente et traitera la transcription dès qu'un worker se libère
     try:
         # Envoyer la tâche dans la queue 'transcription'
         task = transcribe_audio_task.apply_async(
