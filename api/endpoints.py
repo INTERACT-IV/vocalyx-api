@@ -1220,7 +1220,7 @@ async def re_enrich_user_transcription(
         update_data["enrichment_prompts"] = json.dumps(re_enrichment_request.enrichment_prompts, ensure_ascii=False)
     
     if re_enrichment_request.text_correction is not None:
-        update_data["text_correction"] = 1 if re_enrichment_request.text_correction else 0
+        update_data["text_correction"] = 1 if re_enrichment_request.text_correction else False
     
     # Appliquer les mises à jour
     for key, value in update_data.items():
@@ -1801,25 +1801,8 @@ def get_ttl_health(
     # Note: Cette fonctionnalité nécessite que le worker soit accessible
     # Pour l'instant, on retourne une indication que la vérification nécessite l'accès Redis
     try:
-        from infrastructure.external.redis_client import get_redis_client
-        from vocalyx_transcribe.infrastructure.redis.redis_manager import (
-            RedisTranscriptionManager, 
-            RedisCompressionManager
-        )
-        
-        redis_client = get_redis_client()
-        compression = RedisCompressionManager(enabled=True)
-        redis_manager = RedisTranscriptionManager(redis_client, compression)
-        
-        health = redis_manager.check_ttl_health(transcription_id)
-        
-        return {
-            "transcription_id": transcription_id,
-            "status": transcription.status,
-            "ttl_health": health
-        }
-    except ImportError:
-        # Si les modules ne sont pas disponibles (normal si on est dans l'API)
+        # Ces imports ne sont disponibles que dans le worker, pas dans l'API
+        # On retourne donc une réponse indiquant que cette fonctionnalité nécessite le worker
         return {
             "transcription_id": transcription_id,
             "status": transcription.status,
@@ -1832,3 +1815,4 @@ def get_ttl_health(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to check TTL health: {str(e)}"
         )
+

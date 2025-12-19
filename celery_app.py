@@ -119,13 +119,13 @@ def transcribe_audio_task(self, transcription_id: str, use_distributed: bool = N
                 try:
                     import soundfile as sf
                     duration = sf.info(str(file_path)).duration
-                    use_distributed = duration > min_duration
+                    use_distributed = min_duration > 0 and duration > min_duration
                     logger.info(
                         f"[{transcription_id}] 📊 DISTRIBUTION DECISION | "
                         f"Duration: {duration:.1f}s | "
-                        f"Threshold: {min_duration}s | "
+                        f"Threshold: {min_duration}s {'(distribué désactivé)' if min_duration == 0 else ''} | "
                         f"Mode: {'DISTRIBUTED' if use_distributed else 'CLASSIC (single worker)'} | "
-                        f"Reason: {'Audio exceeds threshold' if use_distributed else 'Audio below threshold'}"
+                        f"Reason: {'Audio exceeds threshold' if use_distributed else 'Audio below threshold or distributed disabled'}"
                     )
                 except Exception as e:
                     logger.warning(f"[{transcription_id}] ⚠️ Could not get duration, using non-distributed mode: {e}")
@@ -199,6 +199,103 @@ def transcribe_audio_task(self, transcription_id: str, use_distributed: bool = N
         }
     finally:
         db.close()
+
+def check_worker_availability(queue_name: str = 'transcription') -> Tuple[bool, str]:
+    """
+    Vérifie qu'au moins 1 worker est disponible pour traiter une transcription.
+    Un worker est disponible seulement s'il n'y a aucune tâche en attente sur Celery.
+    
+    Args:
+        queue_name: Nom de la queue à vérifier (par défaut 'transcription')
+        
+    Returns:
+        tuple[bool, str]: (disponible, message)
+            - disponible: True si au moins 1 worker est disponible, False sinon
+            - message: Message explicatif
+    """
+    try:
+        control = celery_app.control
+        inspect = control.inspect(timeout=1.0)
+        
+        # 1. Vérifier qu'il y a au moins 1 worker actif pour la transcription
+        stats = inspect.stats() or {}
+        active_workers = inspect.active() or {}
+        reserved_tasks = inspect.reserved() or {}
+        scheduled_tasks = inspect.scheduled() or {}
+        
+        # Filtrer les workers de transcription (exclure les workers d'enrichissement)
+        transcription_workers = {}
+        for worker_name in stats.keys():
+            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
+                transcription_workers[worker_name] = active_workers.get(worker_name, [])
+        
+        if not transcription_workers:
+            return False, "Aucun worker de transcription disponible"
+        
+        # 2. Vérifier qu'il n'y a pas de tâches en attente
+        # Compter les tâches réservées (déjà assignées à un worker mais pas encore démarrées)
+        total_reserved = 0
+        for worker_name, tasks in reserved_tasks.items():
+            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
+                total_reserved += len(tasks)
+        
+        # Compter les tâches planifiées (en attente dans la queue)
+        total_scheduled = 0
+        for worker_name, tasks in scheduled_tasks.items():
+            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
+                total_scheduled += len(tasks)
+        
+        # Compter les tâches actives (en cours de traitement)
+        total_active = 0
+        for worker_name, tasks in active_workers.items():
+            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
+                total_active += len(tasks)
+        
+        # Vérifier aussi directement dans Redis la longueur de la queue
+        # Celery stocke les queues dans Redis avec le format: celery (queue par défaut) ou le nom de la queue
+        queue_length = 0
+        try:
+            import redis
+            broker_url = config.celery_broker_url
+            # Extraire l'URL Redis depuis le broker URL
+            redis_client = redis.from_url(broker_url, decode_responses=True)
+            
+            # Celery utilise généralement le nom de la queue directement comme clé Redis
+            # Pour la queue 'transcription', la clé sera 'transcription'
+            queue_key = queue_name
+            queue_length = redis_client.llen(queue_key)
+            
+            # Vérifier aussi la queue par défaut 'celery' si elle existe
+            if queue_name != 'celery':
+                default_queue_length = redis_client.llen('celery')
+                queue_length += default_queue_length
+                
+            logger.debug(f"Queue '{queue_name}' length in Redis: {queue_length}")
+        except Exception as redis_err:
+            logger.warning(f"Impossible de vérifier la longueur de la queue Redis: {redis_err}")
+            queue_length = 0
+        
+        # Un worker est disponible seulement s'il n'y a AUCUNE tâche en attente
+        total_pending = total_reserved + total_scheduled + queue_length
+        
+        if total_pending > 0:
+            return False, f"Des tâches sont en attente ({total_pending} tâches: {total_reserved} réservées, {total_scheduled} planifiées, {queue_length} dans Redis)"
+        
+        # Vérifier qu'au moins un worker n'a pas de tâche active (disponible)
+        available_workers = []
+        for worker_name, tasks in transcription_workers.items():
+            if len(tasks) == 0:
+                available_workers.append(worker_name)
+        
+        if not available_workers:
+            return False, f"Tous les workers sont occupés ({len(transcription_workers)} workers actifs avec {total_active} tâches en cours)"
+        
+        return True, f"Worker disponible ({len(available_workers)}/{len(transcription_workers)} workers libres)"
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la vérification de disponibilité des workers: {e}", exc_info=True)
+        # En cas d'erreur, on considère qu'un worker n'est pas disponible pour éviter de surcharger
+        return False, f"Erreur lors de la vérification: {str(e)}"
 
 def get_celery_stats():
     """
@@ -338,103 +435,6 @@ def cancel_task(task_id: str):
         "status": "cancelled"
     }
 
-def check_worker_availability(queue_name: str = 'transcription') -> Tuple[bool, str]:
-    """
-    Vérifie qu'au moins 1 worker est disponible pour traiter une transcription.
-    Un worker est disponible seulement s'il n'y a aucune tâche en attente sur Celery.
-    
-    Args:
-        queue_name: Nom de la queue à vérifier (par défaut 'transcription')
-        
-    Returns:
-        tuple[bool, str]: (disponible, message)
-            - disponible: True si au moins 1 worker est disponible, False sinon
-            - message: Message explicatif
-    """
-    try:
-        control = celery_app.control
-        inspect = control.inspect(timeout=1.0)
-        
-        # 1. Vérifier qu'il y a au moins 1 worker actif pour la transcription
-        stats = inspect.stats() or {}
-        active_workers = inspect.active() or {}
-        reserved_tasks = inspect.reserved() or {}
-        scheduled_tasks = inspect.scheduled() or {}
-        
-        # Filtrer les workers de transcription (exclure les workers d'enrichissement)
-        transcription_workers = {}
-        for worker_name in stats.keys():
-            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
-                transcription_workers[worker_name] = active_workers.get(worker_name, [])
-        
-        if not transcription_workers:
-            return False, "Aucun worker de transcription disponible"
-        
-        # 2. Vérifier qu'il n'y a pas de tâches en attente
-        # Compter les tâches réservées (déjà assignées à un worker mais pas encore démarrées)
-        total_reserved = 0
-        for worker_name, tasks in reserved_tasks.items():
-            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
-                total_reserved += len(tasks)
-        
-        # Compter les tâches planifiées (en attente dans la queue)
-        total_scheduled = 0
-        for worker_name, tasks in scheduled_tasks.items():
-            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
-                total_scheduled += len(tasks)
-        
-        # Compter les tâches actives (en cours de traitement)
-        total_active = 0
-        for worker_name, tasks in active_workers.items():
-            if not (worker_name.startswith('enrichment-worker-') or 'enrichment' in worker_name.lower()):
-                total_active += len(tasks)
-        
-        # Vérifier aussi directement dans Redis la longueur de la queue
-        # Celery stocke les queues dans Redis avec le format: celery (queue par défaut) ou le nom de la queue
-        queue_length = 0
-        try:
-            import redis
-            broker_url = config.celery_broker_url
-            # Extraire l'URL Redis depuis le broker URL
-            redis_client = redis.from_url(broker_url, decode_responses=True)
-            
-            # Celery utilise généralement le nom de la queue directement comme clé Redis
-            # Pour la queue 'transcription', la clé sera 'transcription'
-            queue_key = queue_name
-            queue_length = redis_client.llen(queue_key)
-            
-            # Vérifier aussi la queue par défaut 'celery' si elle existe
-            if queue_name != 'celery':
-                default_queue_length = redis_client.llen('celery')
-                queue_length += default_queue_length
-                
-            logger.debug(f"Queue '{queue_name}' length in Redis: {queue_length}")
-        except Exception as redis_err:
-            logger.warning(f"Impossible de vérifier la longueur de la queue Redis: {redis_err}")
-            queue_length = 0
-        
-        # Un worker est disponible seulement s'il n'y a AUCUNE tâche en attente
-        total_pending = total_reserved + total_scheduled + queue_length
-        
-        if total_pending > 0:
-            return False, f"Des tâches sont en attente ({total_pending} tâches: {total_reserved} réservées, {total_scheduled} planifiées, {queue_length} dans Redis)"
-        
-        # Vérifier qu'au moins un worker n'a pas de tâche active (disponible)
-        available_workers = []
-        for worker_name, tasks in transcription_workers.items():
-            if len(tasks) == 0:
-                available_workers.append(worker_name)
-        
-        if not available_workers:
-            return False, f"Tous les workers sont occupés ({len(transcription_workers)} workers actifs avec {total_active} tâches en cours)"
-        
-        return True, f"Worker disponible ({len(available_workers)}/{len(transcription_workers)} workers libres)"
-        
-    except Exception as e:
-        logger.error(f"Erreur lors de la vérification de disponibilité des workers: {e}", exc_info=True)
-        # En cas d'erreur, on considère qu'un worker n'est pas disponible pour éviter de surcharger
-        return False, f"Erreur lors de la vérification: {str(e)}"
-
 def trigger_enrichment_task(transcription_id: str):
     """
     Déclenche une tâche d'enrichissement pour une transcription.
@@ -470,3 +470,4 @@ if __name__ == "__main__":
         '--loglevel=info',
         '--concurrency=1'
     ])
+
