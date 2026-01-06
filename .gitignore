@@ -43,3 +43,4 @@ celerybeat.pid
 dump.rdb
 
 config.ini
+config.ini.bk

@@ -774,6 +774,7 @@ async def create_transcription(
     project_name: str = Form(...),
     use_vad: bool = Form(True),
     diarization: bool = Form(False),
+    language: Optional[str] = Form("fr"),
     whisper_model: str = Form("small"),
     enrichment: bool = Form(False),
     text_correction: bool = Form(False),  # Correction du texte (orthographe, grammaire) - option séparée et coûteuse
