@@ -42,4 +42,4 @@ celerybeat.pid
 # Redis
 dump.rdb
 
-config.ini
+config.ini*.bk
