@@ -776,6 +776,7 @@ async def create_transcription(
     diarization: bool = Form(False),
     language: Optional[str] = Form("fr"),
     whisper_model: str = Form("small"),
+    initial_prompt: Optional[str] = Form(None),
     enrichment: bool = Form(False),
     text_correction: bool = Form(False),  # Correction du texte (orthographe, grammaire) - option séparée et coûteuse
     llm_model: Optional[str] = Form(None),
@@ -859,6 +860,8 @@ async def create_transcription(
         project_name=project.name,
         file_path=str(file_path),
         whisper_model=whisper_model,
+        language=language,
+        initial_prompt=initial_prompt,
         vad_enabled=1 if use_vad else 0,
         diarization_enabled=1 if diarization else 0,
         enrichment_requested=1 if enrichment else 0,

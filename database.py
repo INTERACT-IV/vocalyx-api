@@ -139,6 +139,7 @@ class Transcription(Base):
     diarization_enabled = Column(Integer, default=0)
     enrichment_requested = Column(Integer, default=0)
     whisper_model = Column(String, nullable=True, default="small")  # Modèle Whisper utilisé
+    initial_prompt = Column(Text, nullable=True)  # Prompt de contexte pour guider Whisper
     
     # Enrichissement
     enrichment_status = Column(
@@ -212,6 +213,7 @@ class Transcription(Base):
             "diarization_enabled": bool(self.diarization_enabled),
             "enrichment_requested": bool(self.enrichment_requested),
             "whisper_model": self.whisper_model,
+            "initial_prompt": self.initial_prompt,
             "enrichment_status": self.enrichment_status,
             "enrichment_worker_id": self.enrichment_worker_id,
             "enrichment_data": enrichment_data_dict,
