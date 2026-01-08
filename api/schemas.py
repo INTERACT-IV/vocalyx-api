@@ -87,6 +87,7 @@ class TranscriptionResponse(BaseModel):
     diarization_enabled: Optional[bool] = None
     enrichment_requested: Optional[bool] = None
     whisper_model: Optional[str] = None
+    initial_prompt: Optional[str] = None  # Prompt de contexte pour guider Whisper
     enrichment_status: Optional[str] = None
     enrichment_worker_id: Optional[str] = None
     enrichment_data: Optional[Dict[str, Any]] = None
