@@ -826,6 +826,15 @@ async def create_transcription(
                 detail=f"Invalid llm_model '{llm_model}'. Valid models: {', '.join(valid_llm_models)}"
             )
     
+    # Debug: vérifier la valeur du prompt initial reçu
+    logger.debug(
+        f"🔍 DEBUG create_transcription | "
+        f"initial_prompt type: {type(initial_prompt)} | "
+        f"initial_prompt value: {repr(initial_prompt)} | "
+        f"initial_prompt is None: {initial_prompt is None} | "
+        f"initial_prompt empty string: {initial_prompt == '' if initial_prompt else 'N/A'}"
+    )
+    
     # 3. Sauvegarder le fichier
     transcription_id = str(uuid.uuid4())
     safe_filename = f"{transcription_id}_{filename}"
