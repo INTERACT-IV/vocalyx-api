@@ -60,3 +60,13 @@ allowed_extensions = wav,mp3,m4a,flac,ogg,webm
 # et distribués sur plusieurs workers pour traitement parallèle
 # Peut être surchargé par la variable d'environnement DISTRIBUTED_MIN_DURATION_SECONDS
 distributed_min_duration_seconds = 30
+
+# Mode distribué forcé
+# Si True, toutes les transcriptions se feront en mode distribué (découpage et distribution sur plusieurs workers)
+# Si False, toutes les transcriptions se feront sur un worker unique
+# Si laissé vide ou non défini, décision automatique selon la durée (basée sur distributed_min_duration_seconds)
+# Peut être surchargé par la variable d'environnement FORCE_DISTRIBUTED_MODE
+# Valeurs acceptées: true, false, auto (ou laisser vide pour décision automatique)
+# Exemple: force_distributed_mode = false
+#          force_distributed_mode = true
+#          force_distributed_mode = 

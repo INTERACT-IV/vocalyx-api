@@ -892,9 +892,12 @@ async def create_transcription(
     # 5. Envoyer la tâche à Celery (même si aucun worker n'est disponible immédiatement)
     # Celery gérera automatiquement la file d'attente et traitera la transcription dès qu'un worker se libère
     try:
+        # Déterminer le mode distribué selon la configuration
+        use_distributed = config.force_distributed_mode
+        
         # Envoyer la tâche dans la queue 'transcription'
         task = transcribe_audio_task.apply_async(
-            args=[transcription_id],
+            args=[transcription_id, use_distributed],
             queue='transcription'
         )
         

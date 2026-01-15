@@ -67,7 +67,8 @@ class Config:
         }
         
         config['TRANSCRIPTION'] = {
-            'distributed_min_duration_seconds': '30'
+            'distributed_min_duration_seconds': '30',
+            'force_distributed_mode': ''  # Vide = décision automatique par défaut
         }
         
         with open(self.config_file, 'w') as f:
@@ -160,6 +161,27 @@ class Config:
             'DISTRIBUTED_MIN_DURATION_SECONDS',
             self.config.getint('TRANSCRIPTION', 'distributed_min_duration_seconds', fallback=30)
         ))
+        
+        # Mode distribué forcé
+        # Si True, toutes les transcriptions se feront en mode distribué
+        # Si False, toutes les transcriptions se feront sur un worker unique
+        # Si None (non défini ou 'auto'), décision automatique selon la durée
+        force_distributed_str = os.environ.get(
+            'FORCE_DISTRIBUTED_MODE',
+            self.config.get('TRANSCRIPTION', 'force_distributed_mode', fallback=None)
+        )
+        if force_distributed_str is None or force_distributed_str.strip() == '':
+            self.force_distributed_mode = None  # Décision automatique par défaut
+        elif force_distributed_str.lower() in ['true', '1', 't', 'yes']:
+            self.force_distributed_mode = True
+        elif force_distributed_str.lower() in ['false', '0', 'f', 'no']:
+            self.force_distributed_mode = False
+        elif force_distributed_str.lower() in ['auto', 'none', 'null']:
+            self.force_distributed_mode = None  # Décision automatique explicite
+        else:
+            # Valeur non reconnue, utiliser la décision automatique
+            logging.warning(f"Valeur non reconnue pour force_distributed_mode: '{force_distributed_str}'. Utilisation de la décision automatique.")
+            self.force_distributed_mode = None
     
     def reload(self):
         """Recharge la configuration depuis le fichier"""
