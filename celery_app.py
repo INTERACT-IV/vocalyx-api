@@ -97,6 +97,12 @@ def transcribe_audio_task(self, transcription_id: str, use_distributed: bool = N
     from datetime import datetime
     from pathlib import Path
     
+    # Log pour vérifier la valeur reçue
+    logger.info(
+        f"[{transcription_id}] 🔧 celery_app.py (API): transcribe_audio_task called | "
+        f"use_distributed={use_distributed} (type: {type(use_distributed).__name__})"
+    )
+    
     # Mettre à jour le celery_task_id dans la DB
     db = SessionLocal()
     try:
