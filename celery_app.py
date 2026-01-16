@@ -88,7 +88,7 @@ def transcribe_audio_task(self, transcription_id: str, use_distributed: bool = N
     
     Args:
         transcription_id: ID de la transcription à traiter
-        use_distributed: Si True, force le mode distribué. Si False, force le mode classique (worker unique). Si None, décide automatiquement selon la durée
+        use_distributed: Si True, force le mode distribué. Si False, force le mode classique (worker unique). Si None, décide automatiquement selon la durée (seulement si force_distributed_mode n'est pas configuré)
         
     Returns:
         dict: Résultat de la transcription
