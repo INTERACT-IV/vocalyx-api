@@ -895,19 +895,32 @@ async def create_transcription(
         # Déterminer le mode distribué selon la configuration
         use_distributed = config.force_distributed_mode
         
+        # IMPORTANT: S'assurer que use_distributed est bien un booléen, pas None
+        # Si la config n'est pas définie, on utilise False par défaut
+        if use_distributed is None:
+            use_distributed = False
+            logger.warning(
+                f"[{transcription_id}] ⚠️ force_distributed_mode was None, defaulting to False"
+            )
+        
         logger.info(
             f"[{transcription_id}] 🔧 API: Sending transcription task | "
             f"force_distributed_mode={use_distributed} (type: {type(use_distributed).__name__}) | "
-            f"Will pass use_distributed={use_distributed} to worker"
+            f"Will pass use_distributed={use_distributed} to worker as second arg"
         )
         
         # Envoyer la tâche dans la queue 'transcription'
-        # IMPORTANT: Passer explicitement False/True, pas None si la config est définie
-        # Utiliser kwargs pour garantir la transmission correcte du paramètre booléen
+        # IMPORTANT: Passer le paramètre dans args pour garantir la transmission
+        # Celery transmet mieux les paramètres positionnels que les kwargs avec JSON serializer
         task = transcribe_audio_task.apply_async(
-            args=[transcription_id],
-            kwargs={'use_distributed': use_distributed},
+            args=[transcription_id, use_distributed],
             queue='transcription'
+        )
+        
+        logger.info(
+            f"[{transcription_id}] ✅ Task enqueued | "
+            f"Task ID: {task.id} | "
+            f"Args sent: [transcription_id={transcription_id}, use_distributed={use_distributed}]"
         )
         
         transcription.celery_task_id = task.id
