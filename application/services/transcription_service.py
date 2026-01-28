@@ -23,7 +23,7 @@ class TranscriptionService:
         transcription_id: str,
         project_name: str,
         file_path: str,
-        whisper_model: str = "small",
+        whisper_model: str = "large-v3",
         use_vad: bool = True,
         use_diarization: bool = False
     ) -> Transcription:

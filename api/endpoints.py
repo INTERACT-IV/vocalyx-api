@@ -775,7 +775,7 @@ async def create_transcription(
     use_vad: bool = Form(True),
     diarization: bool = Form(False),
     language: Optional[str] = Form("fr"),
-    whisper_model: str = Form("small"),
+    whisper_model: str = Form("large-v3"),
     enrichment: bool = Form(False),
     text_correction: bool = Form(False),  # Correction du texte (orthographe, grammaire) - option séparée et coûteuse
     llm_model: Optional[str] = Form(None),
@@ -809,7 +809,9 @@ async def create_transcription(
         )
     
     # 2. Validation du modèle Whisper
-    valid_models = ["tiny", "base", "small", "medium", "large-v3-turbo"]
+    # On supporte désormais explicitement openai-whisper-large-v3 comme modèle principal,
+    # tout en conservant la compatibilité avec large-v3-turbo.
+    valid_models = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
     if whisper_model not in valid_models:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
