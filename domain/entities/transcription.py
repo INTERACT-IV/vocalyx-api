@@ -37,6 +37,7 @@ class Transcription:
     diarization_enabled: bool = False
     enrichment_requested: bool = False
     whisper_model: str = "small"
+    initial_prompt: Optional[str] = None  # Prompt initial pour guider la transcription (comme WhisperX)
     enrichment_status: Optional[str] = None
     enrichment_worker_id: Optional[str] = None
     enrichment_data: Optional[Dict[str, Any]] = None

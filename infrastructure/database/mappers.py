@@ -126,6 +126,7 @@ class TranscriptionMapper:
             text_correction=bool(model.text_correction) if hasattr(model, 'text_correction') else False,
             enriched_text=model.enriched_text if hasattr(model, 'enriched_text') else None,
             enhanced_text=model.enhanced_text if hasattr(model, 'enhanced_text') else None,
+            initial_prompt=model.initial_prompt if hasattr(model, 'initial_prompt') else None,
             created_at=model.created_at,
             finished_at=model.finished_at
         )
@@ -163,6 +164,7 @@ class TranscriptionMapper:
         model.text_correction = 1 if transcription.text_correction else 0
         model.enriched_text = transcription.enriched_text
         model.enhanced_text = transcription.enhanced_text
+        model.initial_prompt = transcription.initial_prompt
         model.created_at = transcription.created_at
         model.finished_at = transcription.finished_at
         

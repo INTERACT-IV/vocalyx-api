@@ -780,6 +780,7 @@ async def create_transcription(
     text_correction: bool = Form(False),  # Correction du texte (orthographe, grammaire) - option séparée et coûteuse
     llm_model: Optional[str] = Form(None),
     enrichment_prompts: Optional[str] = Form(None),  # JSON stringifié
+    initial_prompt: Optional[str] = Form(None),  # Prompt initial pour guider la transcription (comme WhisperX)
     project: Project = Depends(verify_project_key),
     db: Session = Depends(get_db)
 ):
@@ -868,6 +869,7 @@ async def create_transcription(
         llm_model=llm_model,
         enrichment_status="pending" if enrichment else None,
         enrichment_prompts=json.dumps(enrichment_prompts_dict, ensure_ascii=False) if enrichment_prompts_dict else None,
+        initial_prompt=initial_prompt,  # Prompt initial pour guider la transcription (comme WhisperX)
         created_at=datetime.utcnow()
     )
     db.add(transcription)

@@ -139,6 +139,7 @@ class Transcription(Base):
     diarization_enabled = Column(Integer, default=0)
     enrichment_requested = Column(Integer, default=0)
     whisper_model = Column(String, nullable=True, default="small")  # Modèle Whisper utilisé
+    initial_prompt = Column(Text, nullable=True)  # Prompt initial pour guider la transcription (comme WhisperX)
     
     # Enrichissement
     enrichment_status = Column(
@@ -222,6 +223,7 @@ class Transcription(Base):
             "text_correction": bool(self.text_correction) if hasattr(self, 'text_correction') else False,
             "enriched_text": self.enriched_text if hasattr(self, 'enhanced_text') else None,
             "enhanced_text": self.enhanced_text if hasattr(self, 'enhanced_text') else None,
+            "initial_prompt": self.initial_prompt if hasattr(self, 'initial_prompt') else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "queued_at": self.queued_at.isoformat() if hasattr(self, 'queued_at') and self.queued_at else None,  # ✅ NOUVEAU
             "processing_start_time": self.processing_start_time.isoformat() if hasattr(self, 'processing_start_time') and self.processing_start_time else None,  # ✅ NOUVEAU

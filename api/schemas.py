@@ -47,6 +47,10 @@ class TranscriptionCreate(BaseModel):
         default="large-v3",
         description="Modèle Whisper à utiliser: tiny, base, small, medium, large-v3, large-v3-turbo"
     )
+    initial_prompt: Optional[str] = Field(
+        default=None,
+        description="Prompt initial optionnel pour guider la transcription (comme WhisperX). Utilisé uniquement en mode classique (non distribué)."
+    )
 
 class TranscriptionUpdate(BaseModel):
     """Schéma pour mettre à jour une transcription (par les workers)"""
@@ -97,6 +101,7 @@ class TranscriptionResponse(BaseModel):
     text_correction: Optional[bool] = None  # Correction du texte (orthographe, grammaire) - option séparée
     enriched_text: Optional[str] = None  # Texte corrigé si text_correction=true
     enhanced_text: Optional[str] = None  # Texte enrichi avec métadonnées (JSON stringifié) - généré par défaut si enrichment=true
+    initial_prompt: Optional[str] = None  # Prompt initial pour guider la transcription (comme WhisperX)
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
 

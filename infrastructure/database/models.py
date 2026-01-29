@@ -103,6 +103,7 @@ class TranscriptionModel(Base):
     diarization_enabled = Column(Integer, default=0)
     enrichment_requested = Column(Integer, default=0)
     whisper_model = Column(String, nullable=True, default="small")
+    initial_prompt = Column(Text, nullable=True)  # Prompt initial pour guider la transcription (comme WhisperX)
     
     # Enrichissement
     enrichment_status = Column(

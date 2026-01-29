@@ -26,6 +26,13 @@ Ajoute les colonnes de métriques de performance :
 - `processing_end_time` : Quand le worker a terminé le traitement
 - `queue_wait_time` : Temps d'attente dans la file (secondes)
 
+### Migration: add_initial_prompt.sql
+
+Ajoute le champ `initial_prompt` pour le prompting système (comme WhisperX) :
+- `initial_prompt` (TEXT, nullable) : Prompt initial optionnel pour guider la transcription
+- Utilisé uniquement en mode classique (non distribué)
+- Guide la première fenêtre de transcription (~30 secondes)
+
 ## Exécution
 
 ### Via Docker Compose
