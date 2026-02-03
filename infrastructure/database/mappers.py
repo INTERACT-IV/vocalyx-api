@@ -98,6 +98,14 @@ class TranscriptionMapper:
             except (json.JSONDecodeError, TypeError):
                 enrichment_prompts_dict = None
         
+        # Désérialiser text_list JSON
+        text_list_list = None
+        if model.text_list:
+            try:
+                text_list_list = json.loads(model.text_list)
+            except (json.JSONDecodeError, TypeError):
+                text_list_list = None
+        
         return Transcription(
             id=model.id,
             project_name=model.project_name,
@@ -110,6 +118,7 @@ class TranscriptionMapper:
             duration=float(model.duration) if model.duration else None,
             text=model.text,
             segments=segments_list,
+            text_list=text_list_list,
             error_message=model.error_message,
             segments_count=model.segments_count,
             vad_enabled=bool(model.vad_enabled),
@@ -148,6 +157,7 @@ class TranscriptionMapper:
         model.duration = transcription.duration
         model.text = transcription.text
         model.segments = json.dumps(transcription.segments) if transcription.segments else None
+        model.text_list = json.dumps(transcription.text_list, ensure_ascii=False) if transcription.text_list else None
         model.error_message = transcription.error_message
         model.segments_count = transcription.segments_count
         model.vad_enabled = 1 if transcription.vad_enabled else 0

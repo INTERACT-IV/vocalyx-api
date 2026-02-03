@@ -95,6 +95,7 @@ class TranscriptionModel(Base):
     duration = Column(Float, nullable=True)
     text = Column(Text, nullable=True)
     segments = Column(Text, nullable=True)  # JSON stringifié
+    text_list = Column(Text, nullable=True)  # Liste formatée pour la visibilité (JSON stringifié): ["SPEAKER_00: texte", ...]
     error_message = Column(Text, nullable=True)
     segments_count = Column(Integer, nullable=True)
     

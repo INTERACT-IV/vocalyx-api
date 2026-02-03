@@ -61,6 +61,7 @@ class TranscriptionUpdate(BaseModel):
     duration: Optional[float] = None
     text: Optional[str] = None
     segments: Optional[str] = None  # JSON stringifié
+    text_list: Optional[str] = None  # Liste formatée pour la visibilité (JSON stringifié): ["SPEAKER_00: texte", ...]
     error_message: Optional[str] = None
     segments_count: Optional[int] = None
     enrichment_status: Optional[str] = None
@@ -85,6 +86,7 @@ class TranscriptionResponse(BaseModel):
     duration: Optional[float] = None
     text: Optional[str] = None
     segments: Optional[List[dict]] = None
+    text_list: Optional[List[str]] = None  # Liste formatée pour la visibilité: ["SPEAKER_00: texte", "SPEAKER_01: texte", ...]
     error_message: Optional[str] = None
     segments_count: Optional[int] = None
     vad_enabled: Optional[bool] = None

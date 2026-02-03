@@ -31,6 +31,7 @@ class Transcription:
     duration: Optional[float] = None
     text: Optional[str] = None
     segments: Optional[List[Dict[str, Any]]] = None
+    text_list: Optional[List[str]] = None  # Liste formatée pour la visibilité: ["SPEAKER_00: texte", "SPEAKER_01: texte", ...]
     error_message: Optional[str] = None
     segments_count: Optional[int] = None
     vad_enabled: bool = False

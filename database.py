@@ -131,6 +131,7 @@ class Transcription(Base):
     duration = Column(Float, nullable=True)
     text = Column(Text, nullable=True)
     segments = Column(Text, nullable=True)  # JSON stringifié
+    text_list = Column(Text, nullable=True)  # Liste formatée pour la visibilité (JSON stringifié): ["SPEAKER_00: texte", ...]
     error_message = Column(Text, nullable=True)
     segments_count = Column(Integer, nullable=True)
     
@@ -193,6 +194,13 @@ class Transcription(Base):
             except:
                 pass
         
+        text_list_list = None
+        if self.text_list:
+            try:
+                text_list_list = json.loads(self.text_list)
+            except:
+                pass
+        
         return {
             "id": self.id,
             "status": self.status,
@@ -207,6 +215,7 @@ class Transcription(Base):
             "duration": float(self.duration) if self.duration else None,
             "text": self.text,
             "segments": segments_list,
+            "text_list": text_list_list,
             "error_message": self.error_message,
             "segments_count": self.segments_count,
             "vad_enabled": bool(self.vad_enabled),
