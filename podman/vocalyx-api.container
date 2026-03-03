@@ -1,0 +1,38 @@
+[Unit]
+Description=Vocalyx API Instance %i
+After=postgres.service redis.service
+
+[Container]
+Image=localhost/vocalyx-api:latest
+# Nommera les conteneurs vocalyx-api-01, vocalyx-api-02
+ContainerName=vocalyx-api-%i
+Network=vocalyx-network
+PublishPort=8000:8000
+
+# Variables d'environnement
+Environment=DATABASE_URL=postgresql://vocalyx:vocalyx_secret@vocalyx-postgres:5432/vocalyx_db
+Environment=REDIS_URL=redis://vocalyx-redis:6379/0
+Environment=CELERY_BROKER_URL=redis://vocalyx-redis:6379/0
+Environment=CELERY_RESULT_BACKEND=redis://vocalyx-redis:6379/0
+Environment=ADMIN_PROJECT_NAME=ISICOMTECH
+Environment=CORS_ORIGINS=http://localhost:8080,http://vocalyx-frontend:8080,http://localhost:8000,http://vocalyx-haproxy:8000,http://vocalyx-haproxy:8000,http://10.9.8.50:8100,http://10.9.8.50:8000
+Environment=UPLOAD_DIR=/app/shared_uploads
+Environment=LOG_LEVEL=INFO
+Environment=LOG_FILE_PATH=/app/logs/vocalyx-api-%i.log
+
+# Volumes (Notez l'usage de /opt pour le home directory)
+Volume=/opt/vocalyx/shared/uploads:/app/shared_uploads:Z
+Volume=/opt/vocalyx/shared/logs:/app/logs:Z
+
+# Limites
+Memory=1G
+
+# Healthcheck
+HealthCmd=curl -f http://localhost:8000/health
+HealthInterval=30s
+HealthRetries=3
+HealthStartPeriod=40s
+
+[Service]
+Restart=always
+

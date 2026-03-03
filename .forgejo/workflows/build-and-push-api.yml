@@ -1,0 +1,53 @@
+name: Build and push vocalyx-api to Foreman
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - '*'
+
+env:
+  FOREMAN_REGISTRY_HOST: vs-inf-prd-for-fr-501.hostics.fr
+  FOREMAN_NAMESPACE: connectics/vocalyx
+  IMAGE_NAME: vocalyx-api
+  IMAGE_TAG: latest
+
+jobs:
+  build-and-push:
+    # Adapter ce label au runner Forgejo configuré (docker, podman, ubuntu-latest, etc.)
+    runs-on: docker
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Foreman registry
+        run: |
+          echo "${FOREMAN_PASSWORD}" | docker login "${FOREMAN_REGISTRY_HOST}" -u "${FOREMAN_USERNAME}" --password-stdin
+        env:
+          FOREMAN_REGISTRY_HOST: ${{ env.FOREMAN_REGISTRY_HOST }}
+          FOREMAN_USERNAME: ${{ secrets.FOREMAN_USERNAME }}
+          FOREMAN_PASSWORD: ${{ secrets.FOREMAN_PASSWORD }}
+
+      - name: Build vocalyx-api image
+        run: |
+          IMAGE_BASE="${FOREMAN_REGISTRY_HOST}/${FOREMAN_NAMESPACE}"
+          docker build -t "${IMAGE_BASE}/${IMAGE_NAME}:${IMAGE_TAG}" .
+        env:
+          FOREMAN_REGISTRY_HOST: ${{ env.FOREMAN_REGISTRY_HOST }}
+          FOREMAN_NAMESPACE: ${{ env.FOREMAN_NAMESPACE }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+
+      - name: Push vocalyx-api image
+        run: |
+          IMAGE_BASE="${FOREMAN_REGISTRY_HOST}/${FOREMAN_NAMESPACE}"
+          docker push "${IMAGE_BASE}/${IMAGE_NAME}:${IMAGE_TAG}"
+        env:
+          FOREMAN_REGISTRY_HOST: ${{ env.FOREMAN_REGISTRY_HOST }}
+          FOREMAN_NAMESPACE: ${{ env.FOREMAN_NAMESPACE }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+
